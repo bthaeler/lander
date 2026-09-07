@@ -1,0 +1,11 @@
+{
+  "name": "lander",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A 2D vector-graphics lunar lander with real physics and a between-level upgrade economy.",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "serve": "node server.js"
+  }
+}
