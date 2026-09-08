@@ -9,7 +9,9 @@
 
 import { COLORS } from './config.js';
 import { mulberry32, clamp, wrapAngle } from './util.js';
-import { conicPoints, stateAtTrueAnomaly } from './orbit.js';
+import {
+  conicPoints, stateAtTrueAnomaly, trueAnomalyAtRadius,
+} from './orbit.js';
 
 const TIER_STYLE = {
   1: { line: 1.3, glow: 0, stars: 260, twinkle: false },
@@ -367,15 +369,19 @@ export class Renderer {
     const { ctx } = this;
     if (!el || !isFinite(el.a)) return;
 
-    const pts = conicPoints(el, el.closed ? 512 : 320);
+    const surface = body.radius;
+    const pts = conicPoints(el, el.closed ? 512 : 320, surface);
     this.stroke(opts.color || COLORS.orbit, opts.alpha ?? 0.75, 1, true);
     ctx.setLineDash(opts.dash || []);
     ctx.beginPath();
     let drawing = false;
     for (const q of pts) {
+      // Do not draw the stretch that passes underground. A steeply elliptical
+      // impact trajectory dives close to the body's centre, and drawing that
+      // is both wrong and unreadable.
+      if (q.r < surface * 0.999) { drawing = false; continue; }
       const p = this.worldToScreen(q.x, q.y);
-      const near = this.onScreen(p, this.w * 2);
-      if (!near) { drawing = false; continue; }
+      if (!this.onScreen(p, this.w * 2)) { drawing = false; continue; }
       if (!drawing) { ctx.moveTo(p.x, p.y); drawing = true; }
       else ctx.lineTo(p.x, p.y);
     }
@@ -384,11 +390,22 @@ export class Renderer {
 
     if (opts.markers === false) return;
 
-    const surface = body.radius;
     // Periapsis: the point that decides whether this is an orbit or an impact.
-    const per = stateAtTrueAnomaly(el, 0);
-    const pp = this.worldToScreen(per.x, per.y);
+    // When it lies underground, mark where the path actually meets the surface
+    // rather than a point buried inside the body -- for a radial trajectory
+    // the true periapsis is the centre itself.
     const impact = el.periapsis <= surface;
+    let per;
+    if (!impact) {
+      per = stateAtTrueAnomaly(el, 0);
+    } else if (el.radial) {
+      per = { x: surface * Math.cos(el.theta), y: surface * Math.sin(el.theta) };
+    } else {
+      const nu = trueAnomalyAtRadius(el, surface);
+      per = nu === null ? null : stateAtTrueAnomaly(el, nu);
+    }
+    if (!per) return;
+    const pp = this.worldToScreen(per.x, per.y);
     if (this.onScreen(pp, 60)) {
       const col = impact ? COLORS.danger : COLORS.periapsis;
       this.marker(pp, 5, col);

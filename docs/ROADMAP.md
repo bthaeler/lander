@@ -161,6 +161,39 @@ piled on top. The starting lander was at 2.65 rad/s² under thrust — a 1.1 s
 Stock lander is now 0.49 rad/s² coasting and 0.80 under thrust (2.5 s / 2.0 s
 per 90°). Earth ascent and the hands-off descent assist are unaffected.
 
+## Degenerate-conic and warp fixes `[x]`
+
+All reported from actually flying it, and all one root cause: a vertical climb
+has **exactly zero angular momentum**, which makes its conic degenerate.
+
+- [x] Boundedness now comes from specific energy, not eccentricity. A radial
+      trajectory has `e = 1` whether it is a hop or an escape, so the old test
+      labelled a ballistic climb "ESCAPE" while simultaneously warning that it
+      intersected the surface. Apoapsis on a radial path now reports the true
+      apex (`a(1+e)`, which is also numerically stable as `e` approaches 1,
+      unlike `p/(1-e)`).
+- [x] Time warp was pinned at **1x** on any vertical climb: the degenerate
+      periapsis is the body's centre with time-to-periapsis zero, so the
+      periapsis-approach guard fired every frame. Replaced with a
+      time-to-impact estimate that uses the conic's surface crossing where the
+      conic is valid and free-fall where it is not.
+- [x] The guard computed `simDt` *before* cancelling warp, so the dangerous
+      step still executed — one probe tunnelled to 1 km *below* the surface.
+      Warp now winds down before the interval is chosen, and steps down a level
+      at a time rather than slamming to 1x.
+- [x] Warp ceilings raised: 5x -> 100x under power, 10x -> 25x in atmosphere,
+      25x -> 100x near the surface. Integration holds 120 Hz up to 250x, so
+      these are safe; the impact guard does the real protecting.
+- [x] The surface-intersect warning is gated to coasting, orbit-like flight.
+      On a vertical hop the periapsis is the body's centre by definition and on
+      a landing burn hitting the ground is the plan.
+- [x] Trajectories are clipped at the surface instead of drawn through the
+      body's core, and the impact marker sits on the surface crossing.
+- [x] Camera centres on the planet once the body fits inside the viewport, with
+      the ship parked above it.
+- [x] `?level=N` (and `&credits=`), plus `lander.game.jumpTo(i)`, to start
+      straight into a level for testing.
+
 ## Quality of life `[~]`
 
 - [x] **Pause** (`P` / `ESC`). Freezes the simulation completely — position,

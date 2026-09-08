@@ -58,6 +58,8 @@ export function telemetry(game) {
     perAlt: el.periapsis - body.radius,
     tApo: el.closed ? timeToApoapsis(el) : Infinity,
     tPer: timeToPeriapsis(el),
+    radial: el.radial,
+    tImpact: ship.landed ? Infinity : game.timeToImpact(),
     orbital: r > body.radius * 1.002,
     envelope: game.envelope,
     mission: game.mission,
@@ -204,7 +206,13 @@ function drawOrbitBlock(r, t, x, y, align) {
   const rows = [
     ['AP', t.elements.closed ? fmtDistance(t.apoAlt) : 'ESCAPE',
       t.elements.closed ? fmtTime(t.tApo) : '', COLORS.apoapsis],
-    ['PE', fmtDistance(t.perAlt), fmtTime(t.tPer),
+    // Periapsis altitude is worth reading while it is near the surface -- that
+    // is how you watch a circularisation burn work. Once it is deep inside the
+    // body the number stops meaning anything (a radial trajectory's periapsis
+    // is the centre itself), so show the clock to impact instead.
+    ['PE',
+      t.perAlt < -t.body.radius * 0.25 ? 'IMPACT' : fmtDistance(t.perAlt),
+      fmtTime(t.perAlt <= 0 ? t.tImpact : t.tPer),
       t.perAlt <= 0 ? COLORS.danger : COLORS.periapsis],
     ['V', fmtSpeed(t.speed), '', COLORS.ui],
   ];
@@ -345,7 +353,15 @@ function drawWarnings(r, t) {
   else if (t.fuel <= 0 && !t.canStage) msgs.push('PROPELLANT EXHAUSTED');
   else if (t.fuel / Math.max(1, t.fuelCapacity) < 0.1) msgs.push('LOW PROPELLANT');
   if (t.lifeRemaining < 600) msgs.push('LIFE SUPPORT CRITICAL');
-  if (t.perAlt <= 0 && t.orbital && !t.landed) msgs.push('TRAJECTORY INTERSECTS SURFACE');
+  // Only worth saying when you are trying to be in an orbit: coasting, moving
+  // sideways fast, and high up. On a vertical hop the periapsis is the body's
+  // centre by definition, and under a landing burn hitting the ground is the
+  // plan -- warning about either is pure noise.
+  const circular = Math.sqrt(t.body.mu / (t.body.radius + t.altitude));
+  const orbitLike = Math.abs(t.hs) > circular * 0.4;
+  if (t.perAlt <= 0 && t.orbital && !t.landed && orbitLike && t.throttle < 0.02) {
+    msgs.push('TRAJECTORY INTERSECTS SURFACE');
+  }
 
   msgs.forEach((m, i) => {
     r.text(m, r.w / 2, r.h - 58 - i * 19, {

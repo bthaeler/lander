@@ -21,10 +21,19 @@ export const STAGE_STRUCTURE = 60;
 export const GIMBAL_LENGTH_FACTOR = 0.2;
 
 export const WARP_LEVELS = [1, 2, 5, 10, 25, 100, 1000, 10000, 100000];
-export const WARP_MAX_POWERED = 2;      // index into WARP_LEVELS while thrusting
-export const WARP_MAX_ATMOSPHERE = 3;   // index while inside an atmosphere
-export const WARP_MAX_LOW = 4;          // index while below LOW_ALTITUDE_FRACTION
+// Indices into WARP_LEVELS. Powered and low-altitude flight is integrated
+// rather than solved analytically, but the substep count is only capped above
+// 250x, so 100x still runs at the full 120 Hz and is safe. The real protection
+// against warping into the ground is the time-to-impact guard in Game, not
+// these ceilings.
+export const WARP_MAX_POWERED = 5;      // 100x while thrusting
+export const WARP_MAX_ATMOSPHERE = 4;   // 25x inside an atmosphere, where drag
+                                        // changes fast with altitude
+export const WARP_MAX_LOW = 5;          // 100x below LOW_ALTITUDE_FRACTION
 export const LOW_ALTITUDE_FRACTION = 0.004;  // of body radius
+// A single warp step may not consume more than this fraction of the time
+// remaining before the ship would reach the ground.
+export const WARP_IMPACT_MARGIN = 3;
 
 // --- palette ----------------------------------------------------------------
 // Still line art, but colour carries meaning: cyan is your trajectory, blue

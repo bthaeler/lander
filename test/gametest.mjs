@@ -3,13 +3,24 @@ const ROOT = new URL('../js/', import.meta.url).href;
 const { Game } = await import(ROOT + 'game.js');
 const { LEVELS, WARP_LEVELS } = await import(ROOT + 'config.js');
 const { elementsFromState, timeToApoapsis } = await import(ROOT + 'orbit.js');
-const { designStats, salvageValue, inertiaFor } = await import(ROOT + 'design.js');
+const {
+  designStats, salvageValue, inertiaFor, availableEngines,
+} = await import(ROOT + 'design.js');
 const { wrapAngle, clamp, DEG } = await import(ROOT + 'util.js');
 
 let failures = 0;
 function ok(name, cond, detail = '') {
   if (!cond) { failures++; console.log(`  FAIL ${name} ${detail}`); }
   else console.log(`  ok   ${name} ${detail}`);
+}
+
+// For invariants checked every frame: report once, and only complain once.
+const seenOnce = new Map();
+function ok_once(name, cond) {
+  const prev = seenOnce.get(name);
+  if (prev === false) return;                  // already reported a failure
+  if (!cond) { seenOnce.set(name, false); ok(name, false); return; }
+  if (prev === undefined) { seenOnce.set(name, true); ok(name, true); }
 }
 
 function stubRenderer() {
@@ -587,6 +598,109 @@ console.log('expendable stages are not recovered:');
   const before = salvageValue(game.ship);
   game.ship.stages[game.ship.activeStage].fuel *= 0.5;
   ok('burnt propellant is not recovered', salvageValue(game.ship) < before);
+}
+
+// --- radial trajectories -----------------------------------------------------
+// Flying straight up gives exactly zero angular momentum, which makes the
+// conic degenerate: e is 1 whether the trajectory is a hop or an escape, and
+// the periapsis is the body's centre. Classifying by eccentricity reported a
+// ballistic hop as ESCAPE and fired a surface-intersect warning at the same
+// time; it also pinned time warp at 1x.
+console.log('a vertical hop is not an escape:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.session.credits = 1e6;
+  game.loadLevel(3);   // ABOVE THE LINE, launches from a pad
+  game.session.design = {
+    rcs: 1, legs: 1, computer: 0, lifeSupport: 2,
+    stages: [{ engineId: 'lm2', engineCount: 1, fuel: 1400 }],
+  };
+  game.launch();
+  const body = game.body;
+
+  let sawBounded = false;
+  let sawEscape = false;
+  let lowestAltitude = Infinity;
+  let maxWarp = 1;
+  let contradiction = null;
+
+  for (let i = 0; i < 60 * 240; i++) {
+    game.throttle = i < 60 * 90 ? 1 : 0;   // burn straight up, then coast
+    if (i % 30 === 0) input.press('warpUp');
+    game.update(DT); input.endFrame();
+    if (game.state !== 'flying') break;
+
+    const s = game.ship;
+    const el = elementsFromState(s.x, s.y, s.vx, s.vy, body.mu);
+    const alt = body.altitudeAt(s.x, s.y);
+    lowestAltitude = Math.min(lowestAltitude, alt);
+    maxWarp = Math.max(maxWarp, WARP_LEVELS[game.warpIndex]);
+
+    ok_once('trajectory is radial while flying straight up', el.radial);
+    if (el.energy < 0 && el.closed) sawBounded = true;
+    if (el.energy > 0 && !el.closed) sawEscape = true;
+    // The contradiction the user reported: bounded but labelled an escape.
+    if (el.energy < 0 && !el.closed) contradiction = el;
+  }
+
+  ok('a bounded vertical hop reports as a closed trajectory', sawBounded);
+  ok('it only reports ESCAPE once energy actually goes positive', sawEscape);
+  ok('never bounded-and-escaping at the same time', contradiction === null);
+  ok('warp climbs well past 10x on a vertical hop', maxWarp > 10, `${maxWarp}x`);
+  ok('warp never steps the ship through the surface', lowestAltitude > -1,
+    `lowest altitude ${lowestAltitude.toFixed(1)} m`);
+
+  // Apoapsis on a radial trajectory should be the apex it will actually reach.
+  const s = game.ship;
+  s.vx = 0; s.vy = 0;
+  const r0 = s.radiusFromCentre;
+  const up = { x: s.x / r0, y: s.y / r0 };
+  const climb = 300;
+  s.vx = up.x * climb; s.vy = up.y * climb;
+  const el = elementsFromState(s.x, s.y, s.vx, s.vy, body.mu);
+  // Energy conservation: v^2/2 - mu/r = -mu/r_apex at the apex.
+  const expected = 1 / (1 / r0 - (climb * climb) / (2 * body.mu));
+  ok('apoapsis of a radial hop is the true apex',
+    Math.abs(el.apoapsis - expected) / expected < 1e-9,
+    `${(el.apoapsis / 1000).toFixed(1)} km vs ${(expected / 1000).toFixed(1)} km`);
+}
+
+// --- jumping straight to a level --------------------------------------------
+console.log('jumpTo starts a level directly, for testing:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.jumpTo(9);   // EARTH ORBIT
+
+  ok('lands in that level', game.session.levelIndex === 9
+    && game.level.title === 'EARTH ORBIT', game.level.title);
+  ok('and in the hangar, not in flight', game.state === 'hangar');
+  ok('the body matches the level', game.body.name === 'EARTH');
+  ok('everything up to it is unlocked', game.session.frontier === 9);
+  ok('earlier levels count as completed',
+    game.session.completions.slice(0, 9).every((c) => c === 1)
+    && game.session.completions[9] === 0);
+  ok('it grants credits a real run would have', game.session.credits > 50000,
+    `${game.session.credits} CR`);
+
+  // Heavy parts must be available, or the level is unflyable.
+  const engines = availableEngines(game.session.frontier).map((e) => e.id);
+  ok('heavy-lift engines are unlocked', engines.includes('bs2'), engines.join(','));
+
+  // You can still step back to an earlier level from there.
+  game.selectLevel(0);
+  ok('can drop back to level 1', game.session.levelIndex === 0);
+  ok('without losing the unlocks', game.session.frontier === 9);
+
+  // An explicit budget overrides the estimate, and the index is clamped.
+  const g2 = new Game(stubRenderer(), new StubInput());
+  g2.jumpTo(5, 1234);
+  ok('an explicit credit figure is honoured', g2.session.credits === 1234);
+  const g3 = new Game(stubRenderer(), new StubInput());
+  g3.jumpTo(999);
+  ok('out-of-range index is clamped to the last level',
+    g3.session.levelIndex === LEVELS.length - 1);
 }
 
 // --- rotation authority ------------------------------------------------------

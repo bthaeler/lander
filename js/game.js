@@ -1,6 +1,6 @@
 import {
   FIXED_DT, LEVELS, BODIES, COLORS, WARP_LEVELS, WARP_MAX_POWERED,
-  WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION,
+  WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION, WARP_IMPACT_MARGIN,
   RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, HOLD_LABELS, SAMPLE_MASS, STARTING_CREDITS,
   SALVAGE_INTACT, SALVAGE_WRECKED, SEVERITY_SPEED_SPAN,
   REPLAY_DECAY, REPLAY_FLOOR,
@@ -12,7 +12,9 @@ import { Ship } from './ship.js';
 import { Mission } from './mission.js';
 import { Hangar } from './hangar.js';
 import { createDesign, designStats, salvageValue } from './design.js';
-import { elementsFromState, propagate, timeToPeriapsis } from './orbit.js';
+import {
+  elementsFromState, propagate, trueAnomalyAtRadius, timeToTrueAnomaly,
+} from './orbit.js';
 import { drawHUD, telemetry, HUD_LAYOUTS } from './hud.js';
 import { clamp, lerp, wrapAngle, DEG, fmtTime, fmtMass } from './util.js';
 
@@ -64,6 +66,30 @@ export class Game {
   }
 
   get level() { return LEVELS[this.session.levelIndex]; }
+
+  /**
+   * Start straight into a chosen level, for testing. Unlocks everything up to
+   * it, marks the earlier ones completed, and grants roughly the credits a
+   * real playthrough would have arrived with.
+   *
+   * Reachable from the URL (`?level=6`, optionally `&credits=200000`) and from
+   * the console as `lander.game.jumpTo(5)`.
+   */
+  jumpTo(index, credits = null) {
+    const i = clamp(Math.round(index), 0, LEVELS.length - 1);
+    this.session.frontier = i;
+    this.session.completions = LEVELS.map((_, n) => (n < i ? 1 : 0));
+    if (credits !== null) {
+      this.session.credits = Math.max(0, credits);
+    } else {
+      let earned = STARTING_CREDITS;
+      for (let n = 0; n < i; n++) earned += LEVELS[n].reward * 1.2;
+      this.session.credits = Math.round(earned);
+    }
+    this.loadLevel(i);
+    this.state = STATE.HANGAR;
+    return this;
+  }
 
   /** Hold modes the installed flight computer supports. */
   get holdModes() {
@@ -317,22 +343,29 @@ export class Game {
     const low = altitude < body.radius * LOW_ALTITUDE_FRACTION;
 
     this.applyWarpInput(powered, inAir, low || ship.landed);
+
+    // Wind warp down until a single step cannot reach the ground. This has to
+    // happen BEFORE simDt is computed -- an earlier version cancelled warp but
+    // still stepped the pre-cancellation interval, which tunnelled the ship
+    // straight through the surface.
+    if (!ship.landed) {
+      const tti = this.timeToImpact();
+      let steps = 0;
+      while (this.warpIndex > 0
+        && tti < dt * WARP_LEVELS[this.warpIndex] * WARP_IMPACT_MARGIN
+        && steps++ < WARP_LEVELS.length) {
+        this.warpIndex -= 1;
+      }
+      if (steps > 0) this.flash('WARP REDUCED — GROUND APPROACH', 1.6);
+    }
+
     const warp = WARP_LEVELS[this.warpIndex];
     const simDt = dt * warp;
 
     // Coasting outside an atmosphere is advanced analytically -- exact at any
-    // warp factor. Anything else has to be integrated.
-    let useKepler = !powered && !inAir && !ship.landed && warp > 10;
-    if (useKepler) {
-      const el = elementsFromState(ship.x, ship.y, ship.vx, ship.vy, body.mu);
-      // Never let warp skip the ship through the ground.
-      const danger = el.periapsis < body.radius + 25000;
-      if (danger && timeToPeriapsis(el) < simDt * 2.5) {
-        this.warpIndex = 0;
-        this.flash('WARP CANCELLED — PERIAPSIS APPROACH', 2.5);
-        useKepler = false;
-      }
-    }
+    // warp factor. Anything else has to be integrated. A radial trajectory is
+    // a degenerate conic, so propagate() declines it and it integrates too.
+    const useKepler = !powered && !inAir && !ship.landed && warp > 10;
 
     if (useKepler) {
       const res = propagate(ship.x, ship.y, ship.vx, ship.vy, body.mu, simDt);
@@ -372,6 +405,44 @@ export class Game {
       this.ship.step(h, this.body, cmd);
       if (!this.ship.landed && this.checkContact()) return;
     }
+  }
+
+  /**
+   * Seconds until the ship would reach the ground on its current path, from
+   * altitude, radial speed and local gravity.
+   *
+   * Deliberately not derived from the conic. A radial trajectory -- anything
+   * flown straight up -- is degenerate: its periapsis is the planet's centre
+   * and its time-to-periapsis is zero, which pinned time warp at 1x for the
+   * whole flight.
+   */
+  timeToImpact() {
+    const ship = this.ship;
+    const body = this.body;
+    const r = ship.radiusFromCentre;
+    const alt = body.altitudeAt(ship.x, ship.y);
+    if (alt <= 0) return 0;
+
+    const el = elementsFromState(ship.x, ship.y, ship.vx, ship.vy, body.mu);
+    if (!el.radial) {
+      // A trajectory whose periapsis clears the surface never arrives, and a
+      // free-fall estimate would wrongly throttle warp in a stable orbit --
+      // it ignores angular momentum entirely.
+      if (el.periapsis > body.radius) return Infinity;
+      const nu = trueAnomalyAtRadius(el, body.radius);
+      if (nu !== null) {
+        const t = timeToTrueAnomaly(el, nu);
+        if (isFinite(t) && t >= 0) return t;
+      }
+    }
+
+    // Radial, or a conic that could not be solved: fall back to free fall.
+    // Positive sink means descending; when climbing this correctly includes
+    // the coast up and back down.
+    const sink = -(ship.vx * ship.x + ship.vy * ship.y) / r;
+    const g = body.mu / (r * r);
+    const t = (-sink + Math.sqrt(Math.max(0, sink * sink + 2 * g * alt))) / g;
+    return isFinite(t) && t > 0 ? t : Infinity;
   }
 
   applyWarpInput(powered, inAir, low) {
@@ -759,22 +830,44 @@ export class Game {
       return;
     }
 
-    // Flight view. Keep the ship a comfortable size when low, and zoom out
-    // once altitude, not the ship, is what needs to fit on screen.
+    // Flight view, in two framings that blend into each other.
+    //
+    // Close in, the ship is the subject: hold it at a comfortable size when
+    // low, then let altitude be what has to fit. Far out that breaks down --
+    // the body is small enough to see whole but sits half off the edge -- so
+    // the framing shifts to the planet: centred, entire, with the ship above
+    // it.
     const alt = Math.max(1, body.altitudeAt(ship.x, ship.y));
-    // Target on-screen ship size scales with the display, so the close view
-    // reads the same on a laptop and a large monitor.
+    const R = body.radius;
+    const dist = ship.radiusFromCentre;
+    const viewport = Math.min(r.w, r.h);
+
+    // Ship-centred. Target on-screen ship size scales with the display so the
+    // close view reads the same on a laptop and a large monitor.
     const shipScale = (r.h * 0.055) / Math.max(4, ship.length);
     const altScale = (r.h * 0.40) / alt;
-    const target = clamp(Math.min(shipScale, altScale), 1e-7, 40);
-    const k = Math.min(1, dt * 3.5);
-    r.scale = r.scale > 0 ? r.scale * Math.pow(target / r.scale, k) : target;
+    const closeScale = clamp(Math.min(shipScale, altScale), 1e-9, 40);
 
-    r.camera.x = ship.x;
-    r.camera.y = ship.y;
-    // Local up points to screen up.
-    const wanted = ship.upAngle - Math.PI / 2;
-    r.camera.rot = wanted;
+    // Planet-centred: fit the whole body, and the ship along with it.
+    const wideScale = (viewport * 0.45) / (Math.max(R, dist) * 1.08);
+
+    // Blend as the body shrinks to fit. Starts when it is slightly wider than
+    // the viewport and completes once it is comfortably inside.
+    const planetFraction = (2 * R * closeScale) / viewport;
+    const t = clamp((1.35 - planetFraction) / 0.5, 0, 1);
+
+    const target = closeScale * (wideScale / closeScale) ** t;
+    const k = Math.min(1, dt * 3.5);
+    r.scale = r.scale > 0 ? r.scale * (target / r.scale) ** k : target;
+
+    // Ease the centre from the ship to the body's centre over the same blend.
+    r.camera.x = ship.x * (1 - t);
+    r.camera.y = ship.y * (1 - t);
+    // Local up stays screen up. Once centred on the body this also parks the
+    // ship directly above the middle of the screen, with the surface turning
+    // beneath it.
+    r.camera.rot = ship.upAngle - Math.PI / 2;
+    this.planetFramed = t;
   }
 
   // --- drawing ---------------------------------------------------------------

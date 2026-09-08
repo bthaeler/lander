@@ -7,6 +7,16 @@ const renderer = new Renderer(canvas);
 const input = new Input();
 const game = new Game(renderer, input);
 
+// Testing shortcut: ?level=6 starts in that level's hangar with everything up
+// to it unlocked, and &credits=200000 overrides the budget.
+const params = new URLSearchParams(location.search);
+if (params.has('level')) {
+  const level = Number(params.get('level'));
+  const credits = params.has('credits') ? Number(params.get('credits')) : null;
+  // Levels are 1-based in the UI and in the URL; 0-based internally.
+  if (Number.isFinite(level)) game.jumpTo(level - 1, credits);
+}
+
 window.addEventListener('resize', () => renderer.resize());
 
 let last = performance.now();
@@ -25,5 +35,7 @@ function frame(now) {
 
 requestAnimationFrame(frame);
 
-// Handy for tuning from the console: `lander.game.session.credits = 99999`.
+// Handy from the console:
+//   lander.game.jumpTo(6)            -- level 7's hangar (0-based here)
+//   lander.game.session.credits = 1e6
 window.lander = { game, renderer, input };

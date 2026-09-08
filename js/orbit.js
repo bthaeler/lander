@@ -42,12 +42,25 @@ export function elementsFromState(rx, ry, vx, vy, mu) {
   const theta = Math.atan2(ry, rx);
   const nu = wrapAngle(sgn * (theta - argP));
 
-  const closed = e < 1 - NEAR_PARABOLIC;
+  // Boundedness is decided by ENERGY, not by eccentricity. They agree for
+  // ordinary conics, but a radial trajectory -- straight up, zero angular
+  // momentum -- has e exactly 1 whether it is a ballistic hop or an escape.
+  // Testing e there reports a vertical hop as an escape.
+  const closed = energy < 0;
+
+  // A trajectory with no angular momentum is a straight line through the
+  // centre. Its conic is degenerate: p is 0, so the usual polar form is
+  // useless and it has to be drawn and propagated as a special case.
+  const radial = p < r * 1e-9;
+
   return {
-    a, e, argP, h, sgn, p, mu, nu, r, energy, closed,
+    a, e, argP, h, sgn, p, mu, nu, r, theta, energy, closed, radial,
     speed: Math.sqrt(v2),
     periapsis: p / (1 + e),
-    apoapsis: closed ? p / (1 - e) : Infinity,
+    // a(1+e) rather than p/(1-e): algebraically identical, but stable as
+    // e approaches 1 instead of dividing by nearly zero. For a bounded radial
+    // trajectory this correctly gives 2a, the apex it will actually reach.
+    apoapsis: closed ? a * (1 + e) : Infinity,
     period: closed ? 2 * Math.PI * Math.sqrt((a * a * a) / mu) : Infinity,
   };
 }
@@ -202,9 +215,26 @@ export function trueAnomalyAtRadius(el, r) {
   return -Math.acos(cosNu);   // negative branch = inbound
 }
 
-/** Sampled points along the conic, for drawing. */
-export function conicPoints(el, count = 256) {
+/**
+ * Sampled points along the conic, for drawing.
+ * @param minRadius clamps a radial trajectory to start at the surface rather
+ *   than at the body's centre, which is where its degenerate periapsis lies.
+ */
+export function conicPoints(el, count = 256, minRadius = 0) {
   const pts = [];
+  if (el.radial) {
+    // A straight line through the centre. Sample the stretch the ship will
+    // actually fly: surface up to the apex, or outward if it is escaping.
+    const far = el.closed ? el.apoapsis : el.r * 4;
+    const near = Math.min(minRadius, far);
+    const ux = Math.cos(el.theta);
+    const uy = Math.sin(el.theta);
+    for (let i = 0; i <= count; i++) {
+      const rr = near + (i / count) * (far - near);
+      pts.push({ x: rr * ux, y: rr * uy, r: rr, theta: el.theta });
+    }
+    return pts;
+  }
   if (el.closed) {
     for (let i = 0; i <= count; i++) {
       const nu = (i / count) * Math.PI * 2;

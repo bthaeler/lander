@@ -17,6 +17,18 @@ npm test           # physics, orbital mechanics, and end-to-end game tests
 npm run economy    # cheapest viable rocket per level vs. available credits
 ```
 
+To start straight into a level for testing, add `?level=N` (1-based), and
+optionally `&credits=`:
+
+```
+http://localhost:8080/?level=6
+http://localhost:8080/?level=10&credits=200000
+```
+
+Everything up to that level is unlocked and you arrive with roughly the credits
+a real playthrough would have. From the browser console, `lander.game.jumpTo(5)`
+does the same thing (0-based there).
+
 ## Controls
 
 | Key | Action |
@@ -81,6 +93,15 @@ terrain.
 - **Atmosphere** is exponential, with drag `½ρv²C_dA`. It matters: a
   three-stage Earth ascent peaks at ~31 kPa of dynamic pressure, and getting
   the trajectory wrong puts you at Mach 16 in the stratosphere pulling 90 g.
+- **Bounded or not is decided by energy**, not eccentricity. Flying straight up
+  gives exactly zero angular momentum, and such a radial trajectory has `e = 1`
+  whether it is a ballistic hop or a genuine escape — so the apoapsis readout
+  on a vertical climb tells you the apex you would coast to, and only reads
+  ESCAPE once specific energy actually goes positive.
+
+The camera works in two framings that blend into each other: close in the ship
+is the subject, and once the body is small enough to see whole the view centres
+on the planet with the ship parked above it.
 
 Terrain is a procedural, exactly-periodic function of angle rather than a
 stored heightfield — a body 10,900 km around gets metre-scale detail with no
