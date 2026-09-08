@@ -102,6 +102,17 @@ money decision like everything else.
 - [x] Verified: with FC-3 installed and descent assist engaged, level 1 lands
       itself at 1.00 m/s dead vertical on Pad Alpha with no other input
 
+## Economy correction `[x]`
+
+- [x] **Hardware recovery on success.** Only crashes recovered hardware, which
+      made crashing the second-best financial outcome on level 1 — better than
+      every landing except a textbook one. Success now recovers 85% and a
+      crash 30%, both of the *surviving* hardware (payload plus attached
+      stages plus unburnt propellant), so jettisoned stages stay lost and
+      recovery is tied to the design.
+- [x] The rebuild floor applies on success too; a rough landing could pay less
+      than a crash-plus-floor, which reintroduced the same inversion.
+
 ## Quality of life `[~]`
 
 - [x] **Pause** (`P` / `ESC`). Freezes the simulation completely — position,
@@ -154,7 +165,8 @@ and no maneuver nodes.
 - **Body rotation is not modelled.** A landed ship has no surface velocity and
   there are no launch windows. Revisit with Phase 7, where it starts to matter.
 - Rendezvous and docking.
-- Reusable/recovered stages in the economy (currently a lost vehicle refunds
-  90%, and credits are floored so a losing streak can never dead-end).
+- Recovering *jettisoned* stages (currently they are simply lost, which is
+  what makes an expendable design expensive; a recovery-and-refurbish
+  mechanic would be a real addition rather than a fix).
 - Mobile/touch controls. Input already goes through semantic actions, so this
   attaches in `input.js` without touching game logic.

@@ -116,9 +116,30 @@ Tank structure is 8.5% of the propellant it holds. That single number is why
 around 6.2 km/s, while three stages reach 14 km/s and Earth orbit needs 9.4.
 It is a load-bearing constraint, not a knob.
 
-The build cost is paid at launch. A lost vehicle refunds 90%, and credits are
-floored so you can always rebuild what you just lost — the economy exists to
-constrain what you can design, not to punish crashes.
+### Hardware recovery
+
+The build cost is paid at launch, and you get back **85% of whatever hardware
+is still bolted to the ship** when the mission ends. A crash recovers 30% of
+the same thing.
+
+That means recovery is tied directly to your design. Jettisoned stages are
+gone — that is the point of staging — and burnt propellant is gone, but what
+is still attached and still in the tanks comes home. An expendable three-stage
+launcher recovers almost nothing; a lander that flies home whole recovers most
+of itself.
+
+Two properties this is built to guarantee, both covered by tests:
+
+- **Landing always pays better than crashing, for the same vehicle.** Before
+  recovery applied to success, it did not: crashing was the second-best
+  financial outcome on level 1, beating every landing except a textbook one.
+- **A losing streak can never dead-end the campaign.** Credits are floored to
+  the cost of the vehicle you just flew, on success as well as failure, so you
+  can always rebuild it.
+
+Over-building still costs you. Recovery is 85%, not 100%, so flying a 31,000
+credit vehicle at a 900 credit contract loses money even with a perfect
+landing — which is the intended pressure to build to the mission.
 
 ## Progressive fidelity
 

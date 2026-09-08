@@ -3,7 +3,8 @@
 const ROOT = new URL('../js/', import.meta.url).href;
 const { LEVELS, BODIES, LIFE_SUPPORT, STARTING_CREDITS } = await import(ROOT + 'config.js');
 const { Body } = await import(ROOT + 'body.js');
-const { designStats, availableEngines } = await import(ROOT + 'design.js');
+const { designStats, availableEngines, payloadStats } = await import(ROOT + 'design.js');
+const { RECOVERY_ON_SUCCESS } = await import(ROOT + 'config.js');
 
 const FUELS = [40, 80, 150, 300, 600, 1200, 2500, 5000, 9000, 16000, 30000,
   55000, 90000, 150000, 250000, 400000, 600000];
@@ -44,6 +45,7 @@ function cheapestFor(level, levelIndex, samples = 120000) {
 
 let credits = STARTING_CREDITS;
 console.log('level                        cheapest  stages    dV      TWR   credits  verdict');
+console.log('(credits column is what you hold arriving at that level)');
 let stuck = 0;
 for (let i = 0; i < LEVELS.length; i++) {
   const level = LEVELS[i];
@@ -58,10 +60,16 @@ for (let i = 0; i < LEVELS.length; i++) {
     `${best.st.liftoffTWR.toFixed(2).padStart(5)}  ` +
     `${String(Math.round(credits)).padStart(7)}  ${affordable ? 'ok' : 'CANNOT AFFORD'}`
   );
-  // Assume the player pays for the rocket and earns the reward plus a decent
-  // quality/fuel bonus.
+  // Pay for the rocket, earn the reward plus a decent quality/fuel bonus, and
+  // recover surviving hardware. The recovery figure here is deliberately
+  // pessimistic: it assumes every drop of propellant was burnt and every
+  // stage but the last was expended, so it is a lower bound on real income.
+  const payload = payloadStats(best.design);
+  const lastStage = best.st.stages[best.st.stages.length - 1];
+  const recovery = RECOVERY_ON_SUCCESS
+    * (payload.cost + lastStage.engine.cost * best.design.stages[best.design.stages.length - 1].engineCount);
   credits -= best.cost;
-  credits += level.reward * 1.15;
+  credits += level.reward * 1.15 + recovery;
 }
 console.log(`\nstarting credits ${STARTING_CREDITS}, ending ${Math.round(credits)}, ` +
   `${stuck} level(s) unaffordable`);

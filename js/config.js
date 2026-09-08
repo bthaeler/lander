@@ -187,6 +187,16 @@ export function tankStep(capacity, coarse = false) {
   return coarse ? base * 10 : base;
 }
 
+// Hardware recovery. Applied to the value of whatever is still bolted to the
+// ship when the mission ends, so an expendable stack recovers little and a
+// lander that comes home whole recovers most of itself.
+//
+// Success must always beat a crash financially. Before recovery existed on
+// success, crashing was the second-best outcome on level 1, which is exactly
+// backwards.
+export const RECOVERY_ON_SUCCESS = 0.85;   // flown home intact, refurbished
+export const RECOVERY_ON_LOSS = 0.30;      // scraped up off the surface
+
 // Sample mass added to the ship when a sample objective completes.
 export const SAMPLE_MASS = 240;
 

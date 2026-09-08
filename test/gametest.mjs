@@ -3,7 +3,7 @@ const ROOT = new URL('../js/', import.meta.url).href;
 const { Game } = await import(ROOT + 'game.js');
 const { LEVELS, WARP_LEVELS } = await import(ROOT + 'config.js');
 const { elementsFromState, timeToApoapsis } = await import(ROOT + 'orbit.js');
-const { designStats } = await import(ROOT + 'design.js');
+const { designStats, salvageValue } = await import(ROOT + 'design.js');
 const { wrapAngle, clamp, DEG } = await import(ROOT + 'util.js');
 
 let failures = 0;
@@ -355,6 +355,101 @@ console.log('Earth orbit from the Cape (level 10):');
     game.result && !game.result.success ? game.result.reason : '');
   ok('needed multiple stages', stagings >= 1, `${stagings}`);
   ok('atmospheric drag was significant', maxQ > 5000, `${(maxQ / 1000).toFixed(1)} kPa`);
+}
+
+// --- economics of success vs. failure ---------------------------------------
+// Landing successfully must always pay better than crashing. It did not
+// before hardware recovery applied to success: crashing was the second-best
+// financial outcome on level 1, which is exactly backwards.
+console.log('a successful landing must pay better than a crash:');
+{
+  // A vehicle proportionate to the contract: the stock level 1 lander.
+  const CHEAP = () => ({
+    rcs: 0, legs: 0, computer: 0, lifeSupport: 1,
+    stages: [{ engineId: 'lm1', engineCount: 1, fuel: 400 }],
+  });
+
+  function run(design, landIt) {
+    const input = new StubInput();
+    const game = new Game(stubRenderer(), input);
+    game.session.credits = 100000;
+    game.session.design = design;
+    const before = game.session.credits;
+    game.launch();
+    const cost = game.buildCost;
+    const pad = game.body.padByName('alpha');
+    let guard = 0;
+    while (game.state === 'flying' && guard++ < 60 * 900) {
+      if (landIt) descentAutopilot(game, input, pad.theta);
+      game.update(DT); input.endFrame();
+    }
+    input.clear();
+    return { cost, net: game.session.credits - before, res: game.result,
+      credits: game.session.credits };
+  }
+
+  const win = run(CHEAP(), true);
+  const lose = run(CHEAP(), false);
+  console.log(`       stock lander, build cost ${win.cost} CR`);
+  console.log(`       LANDED   hardware ${win.res.recovered} + mission ${win.res.mission}` +
+    ` = ${win.res.credits} credited   NET ${win.net > 0 ? '+' : ''}${win.net}`);
+  console.log(`       CRASHED  (${lose.res.reason}) hardware ${lose.res.recovered}` +
+    `   NET ${lose.net > 0 ? '+' : ''}${lose.net}`);
+
+  ok('the landing succeeded', win.res.success === true);
+  ok('the no-input run crashed', lose.res.success === false);
+  ok('landing pays strictly better than crashing', win.net > lose.net,
+    `${win.net} vs ${lose.net}`);
+  ok('a proportionate vehicle turns a profit', win.net > 0, `${win.net}`);
+  ok('crashing loses money', lose.net < 0, `${lose.net}`);
+  ok('success recovers more hardware than a crash',
+    win.res.recovered > lose.res.recovered,
+    `${win.res.recovered} vs ${lose.res.recovered}`);
+  ok('a crash still leaves enough to rebuild', lose.credits >= lose.cost,
+    `${lose.credits} >= ${lose.cost}`);
+
+  // Overbuilding should cost you, even when the landing is perfect: recovery
+  // is only 85%, so hauling a vehicle far bigger than the contract loses money.
+  const LAVISH = () => ({
+    rcs: 3, legs: 3, computer: 3, lifeSupport: 8,
+    stages: [{ engineId: 've1', engineCount: 2, fuel: 9000 }],
+  });
+  const over = run(LAVISH(), true);
+  const overLost = run(LAVISH(), false);
+  console.log(`       over-built for the same contract, cost ${over.cost} CR ` +
+    `-> landed NET ${over.net > 0 ? '+' : ''}${over.net}, ` +
+    `crashed NET ${overLost.net}`);
+  ok('over-building a cheap contract loses money',
+    over.res.success === true && over.net < 0, `${over.net}`);
+  // Like for like: the invariant is per-vehicle, not across vehicles.
+  ok('landing still beats crashing for the same vehicle',
+    over.net > overLost.net, `${over.net} vs ${overLost.net}`);
+}
+
+console.log('expendable stages are not recovered:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.session.credits = 1e6;
+  game.session.design = {
+    rcs: 1, legs: 1, computer: 0, lifeSupport: 2,
+    stages: [
+      { engineId: 've1', engineCount: 1, fuel: 8000 },
+      { engineId: 'lm2', engineCount: 1, fuel: 1200 },
+    ],
+  };
+  game.launch();
+  const whole = salvageValue(game.ship);
+  game.ship.jettison();
+  const afterStaging = salvageValue(game.ship);
+  console.log(`       salvage: ${Math.round(whole)} CR whole -> ` +
+    `${Math.round(afterStaging)} CR after dropping stage 1`);
+  ok('dropping a stage reduces salvage', afterStaging < whole);
+
+  // Burning propellant also reduces it -- fuel spent is fuel gone.
+  const before = salvageValue(game.ship);
+  game.ship.stages[game.ship.activeStage].fuel *= 0.5;
+  ok('burnt propellant is not recovered', salvageValue(game.ship) < before);
 }
 
 // --- pause -------------------------------------------------------------------

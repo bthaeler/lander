@@ -2,6 +2,7 @@ import {
   FIXED_DT, LEVELS, BODIES, COLORS, WARP_LEVELS, WARP_MAX_POWERED,
   WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION,
   RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, HOLD_LABELS, SAMPLE_MASS, STARTING_CREDITS,
+  RECOVERY_ON_SUCCESS, RECOVERY_ON_LOSS,
   MAX_TOUCHDOWN_SPIN, OFF_PAD_MULTIPLIER, OFF_PAD_TOLERANCE_SCALE,
   MAX_OFF_PAD_SLOPE_DEG,
 } from './config.js';
@@ -9,7 +10,7 @@ import { Body } from './body.js';
 import { Ship } from './ship.js';
 import { Mission } from './mission.js';
 import { Hangar } from './hangar.js';
-import { createDesign, designStats } from './design.js';
+import { createDesign, designStats, salvageValue } from './design.js';
 import { elementsFromState, propagate, timeToPeriapsis } from './orbit.js';
 import { drawHUD, telemetry, HUD_LAYOUTS } from './hud.js';
 import { clamp, wrapAngle, DEG, fmtTime, fmtMass } from './util.js';
@@ -18,10 +19,8 @@ const STATE = { HANGAR: 'hangar', FLYING: 'flying', RESULT: 'result', COMPLETE: 
 
 // Escaping this far means the mission is unrecoverable.
 const ESCAPE_RADIUS_FACTOR = 60;
-// Refund on a lost vehicle, as "recovered hardware". The economy exists to
-// constrain what you can design, not to punish crashes -- a losing streak
-// must never leave the campaign unwinnable.
-const LOSS_REFUND = 0.9;
+// The economy exists to constrain what you can design, not to punish
+// crashes -- a losing streak must never leave the campaign unwinnable.
 // Seconds to sweep the throttle lever end to end.
 const THROTTLE_RATE = 1 / 1.3;
 
@@ -500,15 +499,22 @@ export class Game {
     const padMult = td && td.pad ? td.pad.mult : (td ? OFF_PAD_MULTIPLIER : 1);
     const fuelFraction = ship.totalFuel / Math.max(1, this.startFuel || ship.totalFuel || 1);
     const fuelBonus = Math.round(level.reward * 0.25 * clamp(fuelFraction, 0, 1));
-    const credits = Math.round(level.reward * (0.5 + 0.5 * quality) * padMult) + fuelBonus;
+    const mission = Math.round(level.reward * (0.5 + 0.5 * quality) * padMult) + fuelBonus;
+    // You flew the vehicle home, so you get the surviving hardware back.
+    const recovered = Math.round(salvageValue(ship) * RECOVERY_ON_SUCCESS);
+    const credits = mission + recovered;
 
     this.session.credits += credits;
     this.session.totalEarned += credits;
+    this.ensureRebuildable();
 
     this.result = {
       success: true,
       quality,
       credits,
+      mission,
+      recovered,
+      expended: ship.activeStage,
       fuelBonus,
       padMult,
       touchdown: td,
@@ -523,17 +529,18 @@ export class Game {
 
   fail(reason, detail = {}) {
     this.session.losses += 1;
-    const cost = this.buildCost || 0;
-    const refund = Math.round(cost * LOSS_REFUND);
-    this.session.credits += refund;
-    // Guarantee you can always rebuild the vehicle you just lost.
-    if (this.session.credits < cost) this.session.credits = cost;
+    const recovered = this.ship
+      ? Math.round(salvageValue(this.ship) * RECOVERY_ON_LOSS)
+      : 0;
+    this.session.credits += recovered;
+    this.ensureRebuildable();
 
     if (this.ship) this.spawnDebris();
     this.result = {
       success: false,
       reason,
-      refund,
+      recovered,
+      expended: this.ship ? this.ship.activeStage : 0,
       touchdown: this.lastTouchdown,
       detail,
       fuelLeft: this.ship ? this.ship.totalFuel : 0,
@@ -541,6 +548,16 @@ export class Game {
       objectives: this.mission.objectives,
     };
     this.state = STATE.RESULT;
+  }
+
+  /**
+   * Never leave the player unable to rebuild the vehicle they just flew.
+   * This is the whole soft-lock guarantee, and it has to apply on success as
+   * well: a rough landing can pay less than a crash-plus-floor would.
+   */
+  ensureRebuildable() {
+    const cost = this.buildCost || 0;
+    if (this.session.credits < cost) this.session.credits = cost;
   }
 
   abort() {
@@ -841,9 +858,13 @@ export class Game {
       if (res.sample) rows.push(['SAMPLE ABOARD', fmtMass(res.sample), '']);
       rows.push(['LIFE SUPPORT LEFT', fmtTime(res.lifeLeft), '']);
       rows.push(['FUEL BONUS', `${res.fuelBonus} CR`, '']);
-      rows.push(['CREDITS EARNED', `${res.credits} CR`, '']);
+      rows.push(['MISSION PAYMENT', `${res.mission} CR`, '']);
+      rows.push(['HARDWARE RECOVERED', `${res.recovered} CR`,
+        res.expended ? `${res.expended} STAGE${res.expended > 1 ? 'S' : ''} EXPENDED` : 'NOTHING EXPENDED']);
+      rows.push(['TOTAL CREDITED', `${res.credits} CR`, `BUILD COST ${this.buildCost}`]);
     } else {
-      rows.push(['HARDWARE RECOVERED', `${res.refund} CR`, '']);
+      rows.push(['HARDWARE RECOVERED', `${res.recovered} CR`,
+        res.expended ? `${res.expended} STAGE${res.expended > 1 ? 'S' : ''} ALREADY EXPENDED` : '']);
     }
 
     const w = Math.min(520, r.w - 80);

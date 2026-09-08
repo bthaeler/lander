@@ -130,6 +130,24 @@ export function designStats(design, body = null) {
   };
 }
 
+/**
+ * Value of the hardware that is physically still attached to the ship.
+ *
+ * Jettisoned stages are gone -- that is the point of staging, and it means
+ * an expendable design recovers far less than a lander that flies home whole.
+ * Burnt propellant is gone too; what is left in the tanks still counts.
+ */
+export function salvageValue(ship) {
+  const payload = payloadStats(ship.design);
+  let value = payload.cost;
+  for (let i = ship.activeStage; i < ship.stages.length; i++) {
+    const s = ship.stages[i];
+    value += s.engine.cost * s.engineCount;
+    value += s.fuel * TANK.costPerKg;
+  }
+  return value;
+}
+
 export function buildCost(design) {
   return designStats(design).cost;
 }
