@@ -138,6 +138,32 @@ export const RCS_TIERS = [
   { name: 'R-4 GYRO', mass: 140, torque: 6e4, cost: 5200 },
 ];
 
+// Flight computer. The original brief called these "automated flight systems":
+// each tier is mass and money in exchange for taking work off the pilot.
+export const COMPUTER_TIERS = [
+  { name: 'NONE', mass: 0, cost: 0, modes: [] },
+  {
+    name: 'FC-1 STABILISER', mass: 30, cost: 900,
+    modes: ['KILL'],
+  },
+  {
+    name: 'FC-2 POINTER', mass: 55, cost: 2600,
+    modes: ['KILL', 'UP', 'PROGRADE', 'RETROGRADE'],
+  },
+  {
+    name: 'FC-3 PILOT', mass: 95, cost: 7000,
+    modes: ['KILL', 'UP', 'PROGRADE', 'RETROGRADE', 'DESCENT'],
+  },
+];
+
+export const HOLD_LABELS = {
+  KILL: 'KILL ROTATION',
+  UP: 'HOLD VERTICAL',
+  PROGRADE: 'HOLD PROGRADE',
+  RETROGRADE: 'HOLD RETROGRADE',
+  DESCENT: 'DESCENT ASSIST',
+};
+
 export const LEG_TIERS = [
   { name: 'G-1 STILTS', mass: 45, speedBonus: 0, angleBonus: 0, cost: 150 },
   { name: 'G-2 SPRUNG', mass: 75, speedBonus: 1.4, angleBonus: 3, cost: 600 },

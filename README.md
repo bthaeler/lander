@@ -26,6 +26,7 @@ npm run economy    # cheapest viable rocket per level vs. available credits
 | `SPACE` | Momentary full thrust — hold it, and a landing flies like a classic lander. |
 | `F` | Engine cutoff |
 | `X` | Stage — jettison the burnt-out stage below you |
+| `T` / `G` | Flight computer: engage hold / cycle hold mode |
 | `,` `.` | Time warp down / up |
 | `M` | Map view, framed on your whole orbit |
 | `H` | Cycle HUD layout (TOP BAR / CORNERS / CLUSTER) |
@@ -91,6 +92,23 @@ readiness checks.
 | **Life support** | Mission hours | Mass |
 | **Attitude** | Torque | Mass, which is also more inertia |
 | **Gear** | A wider touchdown envelope | Mass |
+| **Flight computer** | Automation — see below | Mass |
+
+### Automated flight systems
+
+The flight computer is the one upgrade that buys back pilot workload rather
+than performance. Each tier is mass and money:
+
+| Tier | Modes |
+| --- | --- |
+| NONE | you fly everything |
+| FC-1 STABILISER | kill rotation |
+| FC-2 POINTER | plus hold vertical, prograde, retrograde |
+| FC-3 PILOT | plus **descent assist**, which flies the braking curve for you |
+
+`T` engages, `G` cycles modes, and manual rotation always overrides — the
+computer only flies what you are not. Descent assist alone will put a lander
+on Pad Alpha at 1.0 m/s, dead vertical, with no other input.
 
 Tank structure is 8.5% of the propellant it holds. That single number is why
 **single-stage-to-Earth-orbit is impossible** — one enormous stage tops out
@@ -140,8 +158,10 @@ docs/               ROADMAP.md (what is built, what is next)
 
 ## Status
 
-See `docs/ROADMAP.md`. Phases 1–6 are done; the interplanetary capstone
-(Earth → Moon → Earth) is Phase 7 and not started.
+See `docs/ROADMAP.md`. Phases 1–6 and 8 are done; the interplanetary capstone
+(Earth → Moon → Earth) is Phase 7 and not started — the open problem there is
+not the physics but how a player aims a transfer with rotate-and-thrust
+controls and no maneuver nodes.
 
 **Nothing here has been human-playtested.** It is verified by autopilots and
 headless-browser captures, so the difficulty curve — especially the Earth

@@ -3,8 +3,8 @@
 // build cost at launch.
 
 import {
-  COLORS, LIFE_SUPPORT, RCS_TIERS, LEG_TIERS, CAPSULE, TANK, tankStep,
-  engineById,
+  COLORS, LIFE_SUPPORT, RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, CAPSULE, TANK,
+  tankStep, engineById,
 } from './config.js';
 import {
   designStats, availableEngines, addStage, removeStage, adjustFuel, cycleEngine,
@@ -53,6 +53,7 @@ export class Hangar {
     out.push({ kind: 'life' });
     out.push({ kind: 'rcs' });
     out.push({ kind: 'legs' });
+    out.push({ kind: 'computer' });
     return out;
   }
 
@@ -129,6 +130,9 @@ export class Hangar {
         break;
       case 'legs':
         design.legs = clamp(design.legs + dir, 0, LEG_TIERS.length - 1);
+        break;
+      case 'computer':
+        design.computer = clamp((design.computer || 0) + dir, 0, COMPUTER_TIERS.length - 1);
         break;
     }
   }
@@ -285,6 +289,8 @@ export class Hangar {
         fmtTime(design.lifeSupport * LIFE_SUPPORT.hours * 3600)],
       ['ATTITUDE', RCS_TIERS[design.rcs].name, fmtMass(RCS_TIERS[design.rcs].mass)],
       ['LANDING GEAR', LEG_TIERS[design.legs].name, fmtMass(LEG_TIERS[design.legs].mass)],
+      ['FLIGHT COMPUTER', COMPUTER_TIERS[design.computer || 0].name,
+        fmtMass(COMPUTER_TIERS[design.computer || 0].mass)],
     ];
     payloadRows.forEach(([label, value, note]) => {
       const selected = rowIndex === this.selection;
@@ -299,6 +305,10 @@ export class Hangar {
       yy += 22;
       rowIndex++;
     });
+
+    const comp = COMPUTER_TIERS[design.computer || 0];
+    r.text(comp.modes.length ? `HOLD MODES: ${comp.modes.join('  ')}` : 'NO AUTOMATED FLIGHT',
+      x, yy - 4, { size: 10, alpha: 0.45, color: COLORS.accent });
   }
 
   drawVehicle(r, x, y, w, stats, body, level, session) {

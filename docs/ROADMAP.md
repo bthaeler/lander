@@ -8,7 +8,7 @@ multi-stage craft, transfer to the Moon, land, launch again, return to Earth.**
 Then Mars, with sample return trading payload mass against reward.
 
 Tagged versions: `v0.1.0` the flat-world arcade lander, `v0.2.0` the orbital
-rewrite.
+rewrite, `v0.3.0` automated flight systems.
 
 ---
 
@@ -89,6 +89,18 @@ propagation to 6 m over 900 s.
 **Verified:** a 565 t three-stage launcher reaches a 160 km Earth orbit in
 10.8 minutes with max-Q of 31.4 kPa — the real-world figure is ~30–40 kPa,
 which is a good independent check on the atmosphere model.
+
+## Phase 8 — Automated flight systems `[x]`
+
+From the original brief. Bought in the hangar, so automation is a mass and
+money decision like everything else.
+
+- [x] `COMPUTER_TIERS` — NONE / kill rotation / vector holds / descent assist
+- [x] `T` engages, `G` cycles; manual rotation always overrides
+- [x] Attitude controller is PD on the inertial angle; descent assist also
+      takes the throttle and flies the braking curve
+- [x] Verified: with FC-3 installed and descent assist engaged, level 1 lands
+      itself at 1.00 m/s dead vertical on Pad Alpha with no other input
 
 ## Phase 7 — Interplanetary `[ ]` (the capstone, not started)
 

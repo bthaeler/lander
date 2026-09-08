@@ -357,6 +357,50 @@ console.log('Earth orbit from the Cape (level 10):');
   ok('atmospheric drag was significant', maxQ > 5000, `${(maxQ / 1000).toFixed(1)} kPa`);
 }
 
+// --- flight computer ---------------------------------------------------------
+console.log('flight computer:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+
+  // Tier 0 has no automation at all.
+  game.session.design.computer = 0;
+  ok('no computer means no hold modes', game.holdModes.length === 0);
+  ok('hold stays off without a computer', game.holdMode === null);
+
+  game.session.credits = 500000;
+  game.session.design = {
+    rcs: 1, legs: 1, computer: 3, lifeSupport: 2,
+    stages: [{ engineId: 'lm2', engineCount: 1, fuel: 900 }],
+  };
+  ok('top tier offers five modes', game.holdModes.length === 5,
+    game.holdModes.join(','));
+
+  game.launch();
+  // Cycle through to DESCENT via the real key path.
+  input.press('hold');
+  game.update(DT); input.endFrame();
+  ok('T engages the first mode', game.holdMode === 'KILL');
+  for (let i = 0; i < 4; i++) { input.press('holdMode'); game.update(DT); input.endFrame(); }
+  ok('G cycles to descent assist', game.holdMode === 'DESCENT', game.holdMode);
+
+  // Now fly hands-off: no rotation, no throttle, no further input at all.
+  let guard = 0;
+  while (game.state === 'flying' && guard++ < 60 * 900) {
+    game.update(DT);
+    input.endFrame();
+  }
+  const res = game.result;
+  console.log(`       hands-off: ${res.success ? 'LANDED' : 'LOST: ' + res.reason}` +
+    (res.touchdown ? ` v=${res.touchdown.speed.toFixed(2)} m/s ` +
+      `a=${res.touchdown.tiltDeg.toFixed(1)}° pad=${res.touchdown.pad ? res.touchdown.pad.name : 'none'}` : '') +
+    ` after ${(guard / 60).toFixed(0)} s`);
+  ok('descent assist lands the ship unaided', res.success === true,
+    res.success ? '' : res.reason);
+  ok('and lands it gently', !!res.touchdown && res.touchdown.speed < 3,
+    res.touchdown ? `${res.touchdown.speed.toFixed(2)} m/s` : '');
+}
+
 // --- hangar editing ---------------------------------------------------------
 console.log('hangar editing:');
 {

@@ -1,4 +1,4 @@
-import { COLORS, WARP_LEVELS } from './config.js';
+import { COLORS, WARP_LEVELS, HOLD_LABELS } from './config.js';
 import { elementsFromState, timeToApoapsis, timeToPeriapsis } from './orbit.js';
 import {
   clamp, wrapAngle, DEG, fmt, fmtDistance, fmtSpeed, fmtTime, fmtMass,
@@ -65,6 +65,7 @@ export function telemetry(game) {
     lifeRemaining: game.lifeRemaining,
     lifeTotal: game.lifeTotal || game.lifeRemaining,
     warp: WARP_LEVELS[game.warpIndex],
+    holdMode: game.holdMode,
     mapView: game.mapView,
     level: game.level,
     time: game.time,
@@ -314,6 +315,7 @@ function drawStatusPanel(r, t) {
   parts.push(t.warp > 1 ? `WARP ${t.warp}x` : 'WARP 1x');
   parts.push(`MET ${fmtTime(t.missionTime)}`);
   parts.push(`LS ${fmtTime(t.lifeRemaining)}`);
+  if (t.holdMode) parts.push(HOLD_LABELS[t.holdMode]);
   if (t.mapView) parts.push('MAP');
   if (t.landed) parts.push('LANDED');
 

@@ -1,7 +1,7 @@
 import {
   FIXED_DT, LEVELS, BODIES, COLORS, WARP_LEVELS, WARP_MAX_POWERED,
   WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION,
-  RCS_TIERS, LEG_TIERS, SAMPLE_MASS, STARTING_CREDITS,
+  RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, HOLD_LABELS, SAMPLE_MASS, STARTING_CREDITS,
   MAX_TOUCHDOWN_SPIN, OFF_PAD_MULTIPLIER, OFF_PAD_TOLERANCE_SCALE,
   MAX_OFF_PAD_SLOPE_DEG,
 } from './config.js';
@@ -37,6 +37,8 @@ export class Game {
     this.mapView = false;
     this.warpIndex = 0;
     this.throttle = 0;
+    this.holdOn = false;
+    this.holdIndex = 0;
     this.message = '';
     this.messageTime = 0;
     this.restart();
@@ -56,6 +58,16 @@ export class Game {
   }
 
   get level() { return LEVELS[this.session.levelIndex]; }
+
+  /** Hold modes the installed flight computer supports. */
+  get holdModes() {
+    return COMPUTER_TIERS[this.session.design.computer || 0].modes;
+  }
+
+  get holdMode() {
+    const modes = this.holdModes;
+    return this.holdOn && modes.length ? modes[this.holdIndex % modes.length] : null;
+  }
 
   /** Touchdown envelope including landing-gear bonuses. */
   get envelope() {
@@ -101,6 +113,8 @@ export class Game {
     if (level.start.type === 'surface') this.ship.settle(this.body);
 
     this.throttle = 0;
+    this.holdOn = false;
+    this.holdIndex = 0;
     this.lifeRemaining = stats.lifeSeconds;
     this.lifeTotal = stats.lifeSeconds;
     this.startFuel = this.ship.totalFuel;
@@ -210,10 +224,35 @@ export class Game {
     if (this.input.isDown('throttleDown')) this.throttle = clamp(this.throttle - trim, 0, 1);
     if (this.input.wasPressed('cutoff')) this.throttle = 0;
 
+    // Flight computer. Each tier is mass and money bought back as work the
+    // pilot no longer has to do by hand.
+    const modes = this.holdModes;
+    if (this.input.wasPressed('hold')) {
+      if (!modes.length) this.flash('NO FLIGHT COMPUTER INSTALLED', 2);
+      else {
+        this.holdOn = !this.holdOn;
+        this.flash(this.holdOn ? `HOLD: ${HOLD_LABELS[this.holdMode]}` : 'HOLD OFF', 1.8);
+      }
+    }
+    if (this.input.wasPressed('holdMode') && modes.length) {
+      this.holdIndex = (this.holdIndex + 1) % modes.length;
+      this.holdOn = true;
+      this.flash(`HOLD: ${HOLD_LABELS[this.holdMode]}`, 1.8);
+    }
+
+    const manualRotate = (this.input.isDown('right') ? 1 : 0)
+      - (this.input.isDown('left') ? 1 : 0);
     const cmd = {
-      rotate: (this.input.isDown('right') ? 1 : 0) - (this.input.isDown('left') ? 1 : 0),
+      rotate: manualRotate,
       throttle: this.input.isDown('boost') ? 1 : this.throttle,
     };
+
+    // Manual input always wins; the computer only flies what you are not.
+    const mode = this.holdMode;
+    if (mode && manualRotate === 0) cmd.rotate = this.holdRotate(mode);
+    if (mode === 'DESCENT' && !this.input.isDown('boost')) {
+      cmd.throttle = this.descentThrottle();
+    }
 
     const altitude = body.altitudeAt(ship.x, ship.y);
     const powered = cmd.throttle > 0 || ship.spool > 1e-3;
@@ -317,6 +356,48 @@ export class Game {
     }
 
     if (this.mission.complete) this.succeed();
+  }
+
+  /**
+   * Attitude controller. cmd.rotate = +1 applies clockwise torque, which
+   * DECREASES the inertial (counter-clockwise) angle, hence the sign flip.
+   */
+  holdRotate(mode) {
+    const ship = this.ship;
+    const KD = 2.6;
+    if (mode === 'KILL') return clamp(ship.omega * 8, -1, 1);
+
+    let target;
+    if (mode === 'UP' || mode === 'DESCENT') target = ship.upAngle;
+    else if (mode === 'PROGRADE') target = Math.atan2(ship.vy, ship.vx);
+    else if (mode === 'RETROGRADE') target = Math.atan2(-ship.vy, -ship.vx);
+    else return 0;
+
+    // Below a crawl the velocity vector is noise; hold vertical instead.
+    if ((mode === 'PROGRADE' || mode === 'RETROGRADE') && ship.speed < 1) {
+      target = ship.upAngle;
+    }
+
+    const err = wrapAngle(target - ship.angle);
+    return clamp(-(err * 3.2 - ship.omega * KD), -1, 1);
+  }
+
+  /** Descent assist: fly the braking curve down to a slow touchdown. */
+  descentThrottle() {
+    const ship = this.ship;
+    const body = this.body;
+    if (ship.landed) return 0;
+    const r = ship.radiusFromCentre;
+    const alt = Math.max(0, body.altitudeAt(ship.x, ship.y));
+    const g = body.mu / (r * r);
+    const available = ship.maxThrust / ship.mass - g;
+    if (available <= 0) return 1;
+
+    // Radial speed, negative when descending.
+    const vs = (ship.vx * ship.x + ship.vy * ship.y) / r;
+    const target = -Math.max(1.0, Math.min(80,
+      Math.sqrt(Math.max(0, 2 * 0.42 * available * Math.max(0, alt - 6)))));
+    return clamp((target - vs) * 0.5 + (g * ship.mass) / ship.maxThrust, 0, 1);
   }
 
   // --- contact ---------------------------------------------------------------
@@ -651,6 +732,8 @@ export class Game {
         r.w / 2, r.h * 0.36 + 92, { size: 12, align: 'center', alpha: a * 0.6 });
       r.text('X STAGE    , . TIME WARP    M MAP    H HUD    R ABORT',
         r.w / 2, r.h * 0.36 + 112, { size: 12, align: 'center', alpha: a * 0.6 });
+      r.text('T HOLD    G HOLD MODE   (needs a flight computer)',
+        r.w / 2, r.h * 0.36 + 132, { size: 12, align: 'center', alpha: a * 0.5 });
     }
   }
 

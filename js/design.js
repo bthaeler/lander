@@ -5,7 +5,7 @@
 
 import {
   ENGINES, engineById, CAPSULE, LIFE_SUPPORT, RCS_TIERS, LEG_TIERS,
-  TANK, TANK_DRY_FRACTION, STAGE_STRUCTURE,
+  COMPUTER_TIERS, TANK, TANK_DRY_FRACTION, STAGE_STRUCTURE,
 } from './config.js';
 import { clamp } from './util.js';
 
@@ -13,6 +13,7 @@ export function createDesign() {
   return {
     rcs: 0,
     legs: 0,
+    computer: 0,
     lifeSupport: 1,
     stages: [{ engineId: 'lm1', engineCount: 1, fuel: 400 }],
   };
@@ -61,14 +62,17 @@ export function stageStats(stage) {
 export function payloadStats(design) {
   const rcs = RCS_TIERS[design.rcs];
   const legs = LEG_TIERS[design.legs];
+  const computer = COMPUTER_TIERS[design.computer || 0];
   const lifeMass = LIFE_SUPPORT.mass * design.lifeSupport;
   return {
     rcs,
     legs,
+    computer,
     lifeMass,
     lifeSeconds: LIFE_SUPPORT.hours * 3600 * design.lifeSupport,
-    mass: CAPSULE.mass + lifeMass + rcs.mass + legs.mass,
-    cost: rcs.cost + legs.cost + LIFE_SUPPORT.cost * design.lifeSupport + CAPSULE.cost,
+    mass: CAPSULE.mass + lifeMass + rcs.mass + legs.mass + computer.mass,
+    cost: rcs.cost + legs.cost + computer.cost
+      + LIFE_SUPPORT.cost * design.lifeSupport + CAPSULE.cost,
   };
 }
 

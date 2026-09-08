@@ -13,6 +13,8 @@ const KEY_MAP = {
   // Momentary full thrust, so a landing can still be flown by tapping one key.
   Space: ['boost'],
   KeyF: ['cutoff'],
+  KeyT: ['hold'],
+  KeyG: ['holdMode'],
   Enter: ['confirm'],
   Escape: ['back'],
   KeyH: ['hud'],
