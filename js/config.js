@@ -191,11 +191,25 @@ export function tankStep(capacity, coarse = false) {
 // ship when the mission ends, so an expendable stack recovers little and a
 // lander that comes home whole recovers most of itself.
 //
-// Success must always beat a crash financially. Before recovery existed on
-// success, crashing was the second-best outcome on level 1, which is exactly
-// backwards.
-export const RECOVERY_ON_SUCCESS = 0.85;   // flown home intact, refurbished
-export const RECOVERY_ON_LOSS = 0.30;      // scraped up off the surface
+// The rate slides with how badly the vehicle was wrecked: a lander that tipped
+// over at 3 m/s is mostly reusable, a hypersonic impact is scrap. An intact
+// vehicle -- a successful landing, or a mission abandoned with the ship still
+// flying -- recovers the top rate.
+//
+// Success always beats a crash for the same vehicle regardless, because only
+// success also pays the mission.
+export const SALVAGE_INTACT = 0.85;
+export const SALVAGE_WRECKED = 0.05;
+// Impact speed this far past the touchdown limit counts as a total loss.
+export const SEVERITY_SPEED_SPAN = 50;
+
+// Replaying a level you have already completed pays less each time, decaying
+// to a floor. That floor is deliberately still worth flying: it lets a player
+// who has run short grind for money, but slowly enough that building to the
+// mission is always the better plan. Harder levels grind better, since the
+// floor is a fraction of the level's own reward.
+export const REPLAY_DECAY = 0.7;
+export const REPLAY_FLOOR = 0.35;
 
 // Sample mass added to the ship when a sample objective completes.
 export const SAMPLE_MASS = 240;

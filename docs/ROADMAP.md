@@ -113,6 +113,28 @@ money decision like everything else.
 - [x] The rebuild floor applies on success too; a rough landing could pay less
       than a crash-plus-floor, which reintroduced the same inversion.
 
+## Salvage and replay `[x]`
+
+- [x] **Salvage slides with impact severity.** A touchdown 3 m/s over the limit
+      returns 80% of the surviving hardware; a 45 m/s impact 29%; hypersonic
+      5%. Tilt beyond the envelope and landing on the hull add severity.
+      Non-impact failures are handled separately: an abort or a dead crew
+      leaves the vehicle intact at 85%, an escape trajectory loses it entirely.
+- [x] **Level replay for money.** `Q`/`E` in the hangar select any unlocked
+      level. Mission payment decays 100% -> 70% -> 49% -> 35% floor; hardware
+      recovery does not decay, since decaying it would make grinding
+      net-negative and kill the mechanic.
+- [x] `session.frontier` tracks progress separately from the selected level, so
+      part unlocks do not regress when you go back to level 1.
+- [x] Beating the frontier advances it; replaying leaves you in place, so a
+      grind loop is ENTER, fly, ENTER.
+- [x] Finishing the campaign no longer forces a restart — ENTER returns to the
+      hangar with everything replayable.
+- [x] `npm run economy` is now seeded and reports net grind income per level.
+      Grinding is positive on 11 of 12 levels and the gradient emerges from the
+      rules: +158/run on level 1, +8,703 on level 9, and -31,892 on Earth orbit
+      where you discard a 50-tonne launcher each attempt.
+
 ## Quality of life `[~]`
 
 - [x] **Pause** (`P` / `ESC`). Freezes the simulation completely — position,

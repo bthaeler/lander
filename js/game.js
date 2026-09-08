@@ -2,7 +2,8 @@ import {
   FIXED_DT, LEVELS, BODIES, COLORS, WARP_LEVELS, WARP_MAX_POWERED,
   WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION,
   RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, HOLD_LABELS, SAMPLE_MASS, STARTING_CREDITS,
-  RECOVERY_ON_SUCCESS, RECOVERY_ON_LOSS,
+  SALVAGE_INTACT, SALVAGE_WRECKED, SEVERITY_SPEED_SPAN,
+  REPLAY_DECAY, REPLAY_FLOOR,
   MAX_TOUCHDOWN_SPIN, OFF_PAD_MULTIPLIER, OFF_PAD_TOLERANCE_SCALE,
   MAX_OFF_PAD_SLOPE_DEG,
 } from './config.js';
@@ -13,7 +14,7 @@ import { Hangar } from './hangar.js';
 import { createDesign, designStats, salvageValue } from './design.js';
 import { elementsFromState, propagate, timeToPeriapsis } from './orbit.js';
 import { drawHUD, telemetry, HUD_LAYOUTS } from './hud.js';
-import { clamp, wrapAngle, DEG, fmtTime, fmtMass } from './util.js';
+import { clamp, lerp, wrapAngle, DEG, fmtTime, fmtMass } from './util.js';
 
 const STATE = { HANGAR: 'hangar', FLYING: 'flying', RESULT: 'result', COMPLETE: 'complete' };
 
@@ -48,6 +49,11 @@ export class Game {
     this.session = {
       credits: STARTING_CREDITS,
       levelIndex: 0,
+      // Highest level unlocked. Part availability keys off this, not off the
+      // level currently selected, so replaying level 1 does not take your
+      // engines away.
+      frontier: 0,
+      completions: LEVELS.map(() => 0),
       design: createDesign(),
       totalEarned: 0,
       landings: 0,
@@ -68,6 +74,18 @@ export class Game {
     const modes = this.holdModes;
     return this.holdOn && modes.length ? modes[this.holdIndex % modes.length] : null;
   }
+
+  /**
+   * Mission payout multiplier for the selected level. Full price the first
+   * time, decaying with each completion down to a floor that is still worth
+   * flying, so a short player can grind but would rather not.
+   */
+  get payoutMultiplier() {
+    const done = this.session.completions[this.session.levelIndex] || 0;
+    return Math.max(REPLAY_FLOOR, REPLAY_DECAY ** done);
+  }
+
+  get isReplay() { return (this.session.completions[this.session.levelIndex] || 0) > 0; }
 
   /** Touchdown envelope including landing-gear bonuses. */
   get envelope() {
@@ -209,15 +227,32 @@ export class Game {
       case STATE.FLYING: this.updateFlying(dt); break;
       case STATE.RESULT: this.updateResult(dt); break;
       case STATE.COMPLETE:
-        if (this.input.wasPressed('restart') || this.input.wasPressed('confirm')) this.restart();
+        // ENTER goes back to the hangar rather than forcing a restart, so the
+        // campaign being finished does not end the save.
+        if (this.input.wasPressed('restart')) this.restart();
+        else if (this.input.wasPressed('confirm')) {
+          this.loadLevel(this.session.frontier);
+          this.state = STATE.HANGAR;
+        }
         break;
     }
     this.updateCamera(dt);
   }
 
   updateHangar() {
+    if (this.input.wasPressed('prevLevel')) this.selectLevel(this.session.levelIndex - 1);
+    if (this.input.wasPressed('nextLevel')) this.selectLevel(this.session.levelIndex + 1);
     const action = this.hangar.handle(this.input, this.session, this.body, this.level);
     if (action === 'launch') this.launch();
+  }
+
+  /** Pick a level to fly: anything up to and including the frontier. */
+  selectLevel(index) {
+    const i = clamp(index, 0, this.session.frontier);
+    if (i === this.session.levelIndex) return;
+    const row = this.hangar.selection;   // keep the player's place in the editor
+    this.loadLevel(i);
+    this.hangar.selection = row;
   }
 
   flash(msg, seconds = 3) {
@@ -499,13 +534,18 @@ export class Game {
     const padMult = td && td.pad ? td.pad.mult : (td ? OFF_PAD_MULTIPLIER : 1);
     const fuelFraction = ship.totalFuel / Math.max(1, this.startFuel || ship.totalFuel || 1);
     const fuelBonus = Math.round(level.reward * 0.25 * clamp(fuelFraction, 0, 1));
-    const mission = Math.round(level.reward * (0.5 + 0.5 * quality) * padMult) + fuelBonus;
-    // You flew the vehicle home, so you get the surviving hardware back.
-    const recovered = Math.round(salvageValue(ship) * RECOVERY_ON_SUCCESS);
+    const payout = this.payoutMultiplier;
+    const gross = Math.round(level.reward * (0.5 + 0.5 * quality) * padMult) + fuelBonus;
+    // Only the mission payment decays on a replay. Recovery is physical: the
+    // hardware is worth what it is worth however many times you have flown it,
+    // and decaying it would make grinding net-negative.
+    const mission = Math.round(gross * payout);
+    const recovered = Math.round(salvageValue(ship) * SALVAGE_INTACT);
     const credits = mission + recovered;
 
     this.session.credits += credits;
     this.session.totalEarned += credits;
+    this.session.completions[this.session.levelIndex] += 1;
     this.ensureRebuildable();
 
     this.result = {
@@ -513,6 +553,10 @@ export class Game {
       quality,
       credits,
       mission,
+      gross,
+      payout,
+      replay: this.isReplay,
+      completions: this.session.completions[this.session.levelIndex] || 0,
       recovered,
       expended: ship.activeStage,
       fuelBonus,
@@ -529,9 +573,9 @@ export class Game {
 
   fail(reason, detail = {}) {
     this.session.losses += 1;
-    const recovered = this.ship
-      ? Math.round(salvageValue(this.ship) * RECOVERY_ON_LOSS)
-      : 0;
+    const severity = this.severityOf(reason, detail);
+    const rate = lerp(SALVAGE_INTACT, SALVAGE_WRECKED, severity);
+    const recovered = this.ship ? Math.round(salvageValue(this.ship) * rate) : 0;
     this.session.credits += recovered;
     this.ensureRebuildable();
 
@@ -539,6 +583,8 @@ export class Game {
     this.result = {
       success: false,
       reason,
+      severity,
+      salvageRate: rate,
       recovered,
       expended: this.ship ? this.ship.activeStage : 0,
       touchdown: this.lastTouchdown,
@@ -548,6 +594,34 @@ export class Game {
       objectives: this.mission.objectives,
     };
     this.state = STATE.RESULT;
+  }
+
+  /**
+   * How badly the vehicle was wrecked, 0 (walk away) to 1 (total loss).
+   * Drives salvage, so a landing that just missed the envelope leaves most of
+   * the hardware recoverable while a hypersonic impact leaves scrap.
+   */
+  severityOf(reason, detail) {
+    // Not every failure is an impact. An abandoned mission or a dead crew
+    // leaves the vehicle itself intact; an escape trajectory loses it outright.
+    if (reason === 'ABORTED BY CREW') return 0;
+    if (reason === 'LIFE SUPPORT EXHAUSTED') return 0;
+    if (reason === 'LOST — ESCAPED THE BODY') return 1;
+
+    const env = this.envelope;
+    const speed = detail.speed ?? (this.ship ? this.ship.speed : 0);
+    const limitSpeed = detail.limitSpeed ?? env.speed;
+    let sev = clamp((speed - limitSpeed) / SEVERITY_SPEED_SPAN, 0, 1);
+
+    // Coming down badly tilted wrecks structure even at modest speed.
+    const tilt = detail.tiltDeg ?? (this.ship ? Math.abs(this.ship.tilt) * DEG : 0);
+    const limitAngle = detail.limitAngle ?? env.angle;
+    sev += clamp((tilt - limitAngle) / 90, 0, 1) * 0.35;
+
+    // Landing on the hull rather than the gear is its own kind of bad.
+    if (reason === 'HULL IMPACT') sev += 0.3;
+
+    return clamp(sev, 0, 1);
   }
 
   /**
@@ -574,9 +648,18 @@ export class Game {
       this.state = STATE.HANGAR;
       return;
     }
-    const next = this.session.levelIndex + 1;
-    if (next >= LEVELS.length) { this.state = STATE.COMPLETE; return; }
-    this.loadLevel(next);
+    // Beating the frontier unlocks the next level. Replaying an older one
+    // leaves you on it, so a grind loop is just ENTER, fly, ENTER.
+    if (this.session.levelIndex === this.session.frontier) {
+      if (this.session.frontier + 1 >= LEVELS.length) {
+        this.state = STATE.COMPLETE;
+        return;
+      }
+      this.session.frontier += 1;
+      this.loadLevel(this.session.frontier);
+    } else {
+      this.loadLevel(this.session.levelIndex);
+    }
     this.state = STATE.HANGAR;
   }
 
@@ -858,12 +941,15 @@ export class Game {
       if (res.sample) rows.push(['SAMPLE ABOARD', fmtMass(res.sample), '']);
       rows.push(['LIFE SUPPORT LEFT', fmtTime(res.lifeLeft), '']);
       rows.push(['FUEL BONUS', `${res.fuelBonus} CR`, '']);
-      rows.push(['MISSION PAYMENT', `${res.mission} CR`, '']);
+      rows.push(['MISSION PAYMENT', `${res.mission} CR`,
+        res.replay ? `${Math.round(res.payout * 100)}% OF ${res.gross}  (REPLAY x${res.completions})` : '']);
       rows.push(['HARDWARE RECOVERED', `${res.recovered} CR`,
         res.expended ? `${res.expended} STAGE${res.expended > 1 ? 'S' : ''} EXPENDED` : 'NOTHING EXPENDED']);
       rows.push(['TOTAL CREDITED', `${res.credits} CR`, `BUILD COST ${this.buildCost}`]);
     } else {
       rows.push(['HARDWARE RECOVERED', `${res.recovered} CR`,
+        `${Math.round(res.salvageRate * 100)}% SALVAGED`]);
+      rows.push(['IMPACT SEVERITY', severityLabel(res.severity),
         res.expended ? `${res.expended} STAGE${res.expended > 1 ? 'S' : ''} ALREADY EXPENDED` : '']);
     }
 
@@ -901,11 +987,19 @@ export class Game {
     r.text(`${this.session.totalEarned} CREDITS EARNED`, cx, y,
       { size: 15, align: 'center', alpha: 0.75 });
     y += 50;
-    r.text('PRESS R TO FLY IT AGAIN', cx, y, {
+    r.text('ENTER  BACK TO THE HANGAR        R  RESTART THE CAMPAIGN', cx, y, {
       size: 14, align: 'center',
       alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
     });
   }
+}
+
+function severityLabel(sev) {
+  if (sev <= 0.001) return 'INTACT';
+  if (sev < 0.2) return 'LIGHT DAMAGE';
+  if (sev < 0.5) return 'HEAVY DAMAGE';
+  if (sev < 0.85) return 'WRECKED';
+  return 'TOTAL LOSS';
 }
 
 function ratingFor(q) {

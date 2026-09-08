@@ -4,7 +4,7 @@
 
 import {
   COLORS, LIFE_SUPPORT, RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, CAPSULE, TANK,
-  tankStep, engineById,
+  tankStep, engineById, LEVELS, REPLAY_DECAY, REPLAY_FLOOR,
 } from './config.js';
 import {
   designStats, availableEngines, addStage, removeStage, adjustFuel, cycleEngine,
@@ -91,7 +91,7 @@ export class Hangar {
     if (input.wasPressed('addStage')) {
       if (design.stages.length >= MAX_STAGES) this.flash(`MAXIMUM ${MAX_STAGES} STAGES`);
       else {
-        addStage(design, session.levelIndex);
+        addStage(design, session.frontier);
         this.selection = 0;
         this.flash('STAGE ADDED BELOW — IT BURNS FIRST');
       }
@@ -114,7 +114,7 @@ export class Hangar {
     const stage = row.stage !== undefined ? design.stages[row.stage] : null;
     switch (row.kind) {
       case 'engine':
-        cycleEngine(stage, dir, session.levelIndex);
+        cycleEngine(stage, dir, session.frontier);
         break;
       case 'count':
         stage.engineCount = clamp(stage.engineCount + dir, 1, MAX_ENGINES_PER_STAGE);
@@ -173,7 +173,7 @@ export class Hangar {
     if (this.messageTime > 0) {
       r.text(this.message, m, fy - 9, { size: 13, color: COLORS.accent });
     } else {
-      r.text('W/S SELECT    A/D ADJUST (HOLD FOR COARSE)    N ADD STAGE    X REMOVE STAGE',
+      r.text('W/S SELECT   A/D ADJUST (HOLD FOR COARSE)   N ADD STAGE   X REMOVE   Q/E LEVEL',
         m, fy - 9, { size: 12, alpha: 0.5 });
     }
     const afford = stats.cost <= session.credits;
@@ -184,10 +184,28 @@ export class Hangar {
 
   /** What the mission demands. This is what you design against. */
   drawMission(r, x, y, w, body, level, session) {
+    const done = session.completions ? (session.completions[session.levelIndex] || 0) : 0;
+    const payout = Math.max(REPLAY_FLOOR, REPLAY_DECAY ** done);
+    const canBrowse = session.frontier > 0;
+
     r.text('MISSION', x, y, { size: 11, alpha: 0.55 });
+    if (canBrowse) {
+      r.text(`${session.levelIndex + 1}/${session.frontier + 1}   Q/E`, x + w, y,
+        { size: 10, align: 'right', alpha: 0.45 });
+    }
     let yy = y + 22;
     r.text(`LEVEL ${level.id}  ${level.title}`, x, yy, { size: 16 });
-    yy += 20;
+    yy += 18;
+    if (done > 0) {
+      r.text(`REPLAY x${done} — MISSION PAYS ${Math.round(payout * 100)}%`, x, yy,
+        { size: 11, color: COLORS.warn });
+      yy += 16;
+    } else {
+      r.text('FIRST ATTEMPT — FULL PAYMENT', x, yy,
+        { size: 11, color: COLORS.good, alpha: 0.8 });
+      yy += 16;
+    }
+    yy += 2;
     r.text(`${body.name}   g = ${body.surfaceGravity().toFixed(2)} M/S²`, x, yy,
       { size: 12, alpha: 0.65 });
     yy += 16;
@@ -212,6 +230,7 @@ export class Hangar {
     const rows = [
       ['DELTA-V NEEDED', `~${level.estDeltaV} M/S`],
       ['MISSION DURATION', `~${fmtTime(level.estDuration)}`],
+      ['MISSION PAYS UP TO', `${Math.round(level.reward * 1.25 * payout)} CR`],
       ['TOUCHDOWN LIMIT',
         `${(level.envelope.speed + LEG_TIERS[session.design.legs].speedBonus).toFixed(1)} M/S / ` +
         `${Math.round(level.envelope.angle + LEG_TIERS[session.design.legs].angleBonus)}°`],
@@ -247,7 +266,7 @@ export class Hangar {
 
     let yy = y + 24;
     let rowIndex = 0;
-    const engines = availableEngines(session.levelIndex);
+    const engines = availableEngines(session.frontier);
 
     design.stages.forEach((stage, i) => {
       const st = engineById(stage.engineId);

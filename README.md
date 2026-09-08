@@ -32,7 +32,7 @@ npm run economy    # cheapest viable rocket per level vs. available credits
 | `M` | Map view, framed on your whole orbit |
 | `H` | Cycle HUD layout (TOP BAR / CORNERS / CLUSTER) |
 | `R` | Abort the mission |
-| In the hangar | `W`/`S` select, `A`/`D` adjust (hold for coarse), `N` add stage, `X` remove stage, `ENTER` launch |
+| In the hangar | `W`/`S` select, `A`/`D` adjust (hold for coarse), `N` add stage, `X` remove stage, `Q`/`E` pick which level to fly, `ENTER` launch |
 
 ## How it plays
 
@@ -118,28 +118,65 @@ It is a load-bearing constraint, not a knob.
 
 ### Hardware recovery
 
-The build cost is paid at launch, and you get back **85% of whatever hardware
-is still bolted to the ship** when the mission ends. A crash recovers 30% of
-the same thing.
+The build cost is paid at launch, and you get back a share of **whatever
+hardware is still bolted to the ship** when the mission ends. Jettisoned stages
+are gone — that is the point of staging — and burnt propellant is gone, but
+what is still attached and still in the tanks comes home. An expendable
+three-stage launcher recovers almost nothing; a lander that flies home whole
+recovers most of itself.
 
-That means recovery is tied directly to your design. Jettisoned stages are
-gone — that is the point of staging — and burnt propellant is gone, but what
-is still attached and still in the tanks comes home. An expendable three-stage
-launcher recovers almost nothing; a lander that flies home whole recovers most
-of itself.
+**How much you get back slides with how badly you wrecked it:**
 
-Two properties this is built to guarantee, both covered by tests:
+| Outcome | Severity | Salvaged |
+| --- | --- | --- |
+| Landed, or mission abandoned with the ship intact | 0.00 | 85% |
+| Touchdown 3 m/s over the limit | 0.06 | 80% |
+| Impact at 45 m/s | 0.70 | 29% |
+| Hypersonic impact | 1.00 | 5% |
 
-- **Landing always pays better than crashing, for the same vehicle.** Before
-  recovery applied to success, it did not: crashing was the second-best
-  financial outcome on level 1, beating every landing except a textbook one.
+Coming down badly tilted adds to severity, and landing on the hull rather than
+the gear adds more. Not every failure is an impact: an abandoned mission or a
+dead crew leaves the vehicle intact, while an escape trajectory loses it
+outright.
+
+Two properties this guarantees, both covered by tests:
+
+- **Landing always pays better than crashing, for the same vehicle** — only
+  success also pays the mission. Before recovery applied to success it did not:
+  crashing was the second-best financial outcome on level 1, beating every
+  landing except a textbook one.
 - **A losing streak can never dead-end the campaign.** Credits are floored to
-  the cost of the vehicle you just flew, on success as well as failure, so you
-  can always rebuild it.
+  the cost of the vehicle you just flew, on success as well as failure.
 
 Over-building still costs you. Recovery is 85%, not 100%, so flying a 31,000
 credit vehicle at a 900 credit contract loses money even with a perfect
 landing — which is the intended pressure to build to the mission.
+
+### Replaying levels for money
+
+`Q` and `E` in the hangar pick which level to fly: anything you have already
+unlocked. Replaying a level you have completed pays **less mission money each
+time** — 100%, 70%, 49%, then a floor of 35% — while hardware recovery does not
+decay, because the hardware is worth what it is worth however often you fly it.
+
+The floor is deliberately still worth flying, so a player who has run short can
+always mine for money. It is just slow, and how slow depends on where you grind
+(figures from `npm run economy`):
+
+| Grind site | Net per run |
+| --- | --- |
+| Level 1, First Light | +158 |
+| Level 3, Hop | +475 |
+| Level 8, Sample Return | +1,770 |
+| Level 9, Thick Air | +8,703 |
+| Level 10, Earth Orbit | **−31,892** |
+
+The gradient falls out of the rules rather than being tuned in: the floor is a
+fraction of that level's *own* reward, so harder contracts grind better — and
+Earth orbit is a terrible place to farm, because you throw away a 50-tonne
+launcher every run. Grinding the best level you can actually fly is always the
+right move, and level 1 will fund an Earth launcher only if you fly it a few
+hundred times.
 
 ## Progressive fidelity
 

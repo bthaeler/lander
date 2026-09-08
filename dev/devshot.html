@@ -65,6 +65,10 @@ if (screen === 'hangar') {
     ],
   };
   game.hangar.selection = Number(params.get('sel') || 2);
+  // Optional replay state, to show the decayed-payout header.
+  game.session.frontier = Number(params.get('frontier') || level);
+  const reps = Number(params.get('reps') || 0);
+  if (reps) game.session.completions[game.session.levelIndex] = reps;
 } else {
   game.launch();
   if (screen === 'flight') place(alt, 0.22);

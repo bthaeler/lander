@@ -426,6 +426,143 @@ console.log('a successful landing must pay better than a crash:');
     over.net > overLost.net, `${over.net} vs ${overLost.net}`);
 }
 
+console.log('salvage falls as the impact gets worse:');
+{
+  // Drop the ship onto Pad Alpha at a chosen speed and see what comes back.
+  function crashAt(speed) {
+    const input = new StubInput();
+    const game = new Game(stubRenderer(), input);
+    game.session.credits = 100000;
+    game.session.design = {
+      rcs: 0, legs: 0, computer: 0, lifeSupport: 1,
+      stages: [{ engineId: 'lm1', engineCount: 1, fuel: 400 }],
+    };
+    game.launch();
+    const body = game.body;
+    const pad = body.padByName('alpha');
+    const ship = game.ship;
+    // Start just clear of the pad so the impact speed is the speed we asked
+    // for, not that plus a long acceleration under gravity.
+    const r = pad.r + ship.length / 2 + 1;
+    ship.x = r * Math.cos(pad.theta);
+    ship.y = r * Math.sin(pad.theta);
+    ship.angle = pad.theta;
+    ship.omega = 0;
+    ship.vx = -speed * Math.cos(pad.theta);
+    ship.vy = -speed * Math.sin(pad.theta);
+    ship.landed = false;
+    let guard = 0;
+    while (game.state === 'flying' && guard++ < 60 * 120) {
+      game.update(DT); input.endFrame();
+    }
+    return game.result;
+  }
+
+  const gentle = crashAt(13);     // level 1 limit is 10 m/s: only just too fast
+  const hard = crashAt(45);
+  const violent = crashAt(400);
+  for (const [label, res] of [['13 m/s', gentle], ['45 m/s', hard], ['400 m/s', violent]]) {
+    console.log(`       ${label.padStart(8)}  severity ${res.severity.toFixed(2)}  ` +
+      `salvage ${Math.round(res.salvageRate * 100)}%  recovered ${res.recovered} CR`);
+  }
+  ok('all three were losses',
+    !gentle.success && !hard.success && !violent.success);
+  ok('severity rises with impact speed',
+    gentle.severity < hard.severity && hard.severity < violent.severity);
+  ok('salvage falls as severity rises',
+    gentle.recovered > hard.recovered && hard.recovered > violent.recovered);
+  ok('a near-miss keeps most of the hardware', gentle.salvageRate > 0.7,
+    `${Math.round(gentle.salvageRate * 100)}%`);
+  ok('a hypersonic impact is a total loss', violent.severity >= 1
+    && violent.salvageRate < 0.1, `${Math.round(violent.salvageRate * 100)}%`);
+
+  // An abandoned mission is not an impact at all -- the ship is still intact.
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.session.credits = 100000;
+  game.launch();
+  for (let i = 0; i < 30; i++) { game.update(DT); input.endFrame(); }
+  input.press('restart');
+  game.update(DT); input.endFrame();
+  console.log(`       aborted   severity ${game.result.severity.toFixed(2)}  ` +
+    `salvage ${Math.round(game.result.salvageRate * 100)}%`);
+  ok('aborting recovers the vehicle intact',
+    game.result.severity === 0 && game.result.salvageRate > 0.8);
+}
+
+console.log('replay payout decays to a floor:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  const seq = [];
+  for (let n = 0; n < 9; n++) {
+    game.session.completions[0] = n;
+    seq.push(game.payoutMultiplier);
+  }
+  console.log(`       payout by completions: ${seq.map((v) => `${Math.round(v * 100)}%`).join(' ')}`);
+  ok('first attempt pays full', seq[0] === 1);
+  ok('each replay pays less, until the floor',
+    seq[1] < seq[0] && seq[2] < seq[1] && seq[3] < seq[2]);
+  ok('it bottoms out at a floor', seq[7] === seq[8] && seq[8] > 0,
+    `${Math.round(seq[8] * 100)}%`);
+  ok('the floor is never zero, so grinding always earns something', seq[8] >= 0.2 - 1e-9);
+}
+
+console.log('replaying a level end to end:');
+{
+  function fly(game, input) {
+    const pad = game.body.padByName('alpha');
+    game.launch();
+    let guard = 0;
+    while (game.state === 'flying' && guard++ < 60 * 900) {
+      descentAutopilot(game, input, pad.theta);
+      game.update(DT); input.endFrame();
+    }
+    input.clear();
+    const res = game.result;
+    input.press('confirm');
+    game.update(DT); input.endFrame();
+    return res;
+  }
+
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.session.credits = 100000;
+
+  const first = fly(game, input);
+  ok('beating the frontier advances it', game.session.frontier === 1,
+    `frontier ${game.session.frontier}`);
+  ok('and selects the newly unlocked level', game.session.levelIndex === 1);
+  ok('the completion was recorded', game.session.completions[0] === 1);
+
+  // Go back and grind level 1.
+  game.selectLevel(0);
+  ok('can select a completed level', game.session.levelIndex === 0);
+  const second = fly(game, input);
+  ok('a replay is flagged as such', second.replay === true);
+  ok('the replay pays less mission money', second.mission < first.mission,
+    `${first.mission} -> ${second.mission}`);
+  ok('but recovers the same hardware',
+    Math.abs(second.recovered - first.recovered) < first.recovered * 0.1,
+    `${first.recovered} vs ${second.recovered}`);
+  ok('replaying does not advance the frontier', game.session.frontier === 1);
+  ok('and leaves you on the level you replayed', game.session.levelIndex === 0);
+
+  // Grind it to the floor and confirm it still turns a profit.
+  let runs = 2;
+  let lastNet = 0;
+  while (runs < 9) {
+    const before = game.session.credits;
+    fly(game, input);
+    lastNet = game.session.credits - before;
+    runs++;
+  }
+  console.log(`       after ${runs} completions of level 1, a run nets ` +
+    `${lastNet > 0 ? '+' : ''}${lastNet} CR at the payout floor`);
+  ok('grinding at the floor is still profitable', lastNet > 0, `${lastNet}`);
+  ok('but only barely, so it is a last resort', lastNet < 400, `${lastNet}`);
+}
+
 console.log('expendable stages are not recovered:');
 {
   const input = new StubInput();
@@ -570,7 +707,7 @@ console.log('hangar editing:');
 {
   const input = new StubInput();
   const game = new Game(stubRenderer(), input);
-  game.session.levelIndex = 9;   // everything unlocked
+  game.session.frontier = 9;     // everything unlocked (progress, not selection)
   const design = game.session.design;
 
   const before = design.stages.length;
