@@ -28,7 +28,10 @@ const CAPSULE_LENGTH = 2.6;
 
 /** Physical size of a stage, which sets both drawing and rotational inertia. */
 export function stageGeometry(stage) {
-  const radius = clamp(0.6 + 0.9 * Math.log10(1 + stage.fuel / 1000), 0.6, 5);
+  // Diameter grows slowly so big stages come out long and narrow like real
+  // ones. Length matters beyond looks: rotational inertia goes as length^2
+  // and gimbal torque scales with length, so a squat stack would steer wrong.
+  const radius = clamp(0.55 + 0.45 * Math.log10(1 + stage.fuel / 300), 0.55, 3.6);
   const volume = stage.fuel / PROP_DENSITY;
   const length = volume / (Math.PI * radius * radius) + 1.5;
   return { radius, length };

@@ -4,90 +4,98 @@
 <body>
 <canvas id="screen"></canvas>
 <script type="module">
-// Temporary harness: renders one game state statically so it can be screenshot.
+// Harness: renders one game state statically so it can be screenshot.
+// ?screen=hangar|flight|orbit|map|result  &level=N &hud=N &alt=METRES
 import { Renderer } from '../js/render.js';
 import { Input } from '../js/input.js';
 import { Game } from '../js/game.js';
 
 const params = new URLSearchParams(location.search);
-const screen = params.get('screen') || 'briefing';
+const screen = params.get('screen') || 'hangar';
 const level = Number(params.get('level') || 0);
 const hud = Number(params.get('hud') || 0);
+const alt = Number(params.get('alt') || 200);
 
 const canvas = document.getElementById('screen');
 const renderer = new Renderer(canvas);
 const input = new Input();
 const game = new Game(renderer, input);
 game.hudLayout = hud;
-game.session.credits = 4200;
-if (level) { game.session.loadout = { engine: 1, tank: 2, rcs: 1, legs: 1 }; game.loadLevel(level); }
+game.session.credits = 400000;
+game.loadLevel(level);   // also sets session.levelIndex, which gates part unlocks
 
-function fly(seconds, thrust, rot = 0) {
-  input.held.clear();
-  if (thrust) input.held.add('thrust');
-  if (rot < 0) input.held.add('left');
-  if (rot > 0) input.held.add('right');
-  game.state = 'flying';
-  for (let i = 0; i < seconds * 60; i++) { game.update(1 / 60); input.endFrame(); }
-  input.held.clear();
+// A vehicle with enough margin to be placed anywhere for a screenshot.
+if (screen !== 'hangar') {
+  game.session.design = {
+    rcs: 2, legs: 2, lifeSupport: 6,
+    stages: [
+      { engineId: 've1', engineCount: 1, fuel: 12000 },
+      { engineId: 'lm2', engineCount: 1, fuel: 2500 },
+    ],
+  };
 }
 
-// Braking autopilot, used to reach a realistic final-approach frame.
-function approach(stopAlt) {
-  game.state = 'flying';
-  const grav = { moon: 1.62, mars: 3.71, mercury: 3.70 }[game.level.planet];
-  for (let i = 0; i < 60 * 200; i++) {
-    const ship = game.ship;
-    const alt = Math.max(0, ship.clearance(game.terrain));
-    if (alt < stopAlt || game.state !== 'flying') break;
-    const pad = game.terrain.nearestPad(ship.x);
-    const dx = pad.cx - ship.x;
-    const wantVx = Math.max(-10, Math.min(10, dx * 0.12));
-    let wantAngle = Math.max(-0.6, Math.min(0.6, (wantVx - ship.vx) * 0.11));
-    if (alt < 12) wantAngle = 0;
-    const rot = (wantAngle - ship.angle) * 6 - ship.omega * 2.6;
-    input.held.clear();
-    if (rot < -0.15) input.held.add('left');
-    if (rot > 0.15) input.held.add('right');
-    const aSafe = 0.45 * (ship.stats.maxThrust / ship.mass - grav);
-    let wantVy = -Math.max(1.1, Math.min(30, Math.sqrt(Math.max(0, 2 * aSafe * Math.max(0, alt - 5)))));
-    if (alt < 70 && Math.abs(dx) > pad.width * 0.15) wantVy = Math.max(wantVy, -0.3);
-    if (ship.vy < wantVy) input.held.add('thrust');
-    game.update(1 / 60);
-    input.endFrame();
-  }
-  input.held.clear();
+/** Drop the ship to a given altitude over a pad, descending and burning. */
+function place(altitude, tilt = 0, vs = -12, hs = 4) {
+  const body = game.body;
+  const pad = body.pads[0];
+  const theta = pad.theta + 900 / body.radius;
+  const r = body.surfaceRadius(theta) + altitude;
+  const ship = game.ship;
+  ship.x = r * Math.cos(theta);
+  ship.y = r * Math.sin(theta);
+  const ur = { x: Math.cos(theta), y: Math.sin(theta) };
+  const ut = { x: -ur.y, y: ur.x };
+  ship.vx = ur.x * vs + ut.x * hs;
+  ship.vy = ur.y * vs + ut.y * hs;
+  ship.angle = theta - tilt;
+  ship.landed = false;
+  ship.spool = 0.8;
 }
 
-if (screen === 'flying') { fly(6, false, 1); fly(3, true); }
-if (screen === 'approach') { approach(Number(params.get('alt') || 20)); fly(0.4, true); }
 if (screen === 'hangar') {
-  game.session.upcomingLevel = game.session.upcomingLevel || null;
-  game.session.levelIndex = Math.max(1, level);
-  game.updateHangar();
   game.state = 'hangar';
-}
-if (screen === 'result-good') {
-  fly(4, false);
-  game.result = {
-    success: true, speed: 1.42, angleDeg: -2.3, onPad: true, mult: 1.45,
-    quality: 0.91, credits: 1284, fuelBonus: 190, limitSpeed: 10, limitAngle: 30,
-    fuel: 108, rating: 'TEXTBOOK', time: 41.2,
+  // Give the hangar something interesting to show.
+  game.session.design = {
+    rcs: 1, legs: 1, lifeSupport: 3,
+    stages: [
+      { engineId: 'bs1', engineCount: 2, fuel: 60000 },
+      { engineId: 've1', engineCount: 1, fuel: 14000 },
+      { engineId: 'lm2', engineCount: 1, fuel: 2200 },
+    ],
   };
-  game.state = 'result';
-}
-if (screen === 'result-bad') {
-  fly(4, false);
-  game.spawnDebris();
-  game.stepDebris(0.6);
-  game.result = {
-    success: false, reason: 'IMPACT SPEED TOO HIGH', speed: 14.8, angleDeg: 12.4,
-    onPad: false, limitSpeed: 10, limitAngle: 30, fuel: 61, time: 28.7,
-  };
-  game.state = 'result';
+  game.hangar.selection = Number(params.get('sel') || 2);
+} else {
+  game.launch();
+  if (screen === 'flight') place(alt, 0.22);
+  if (screen === 'orbit' || screen === 'map') {
+    // Level 6 already spawns in orbit; give it an eccentric one to show markers.
+    const body = game.body;
+    const r = body.radius + 60000;
+    const v = body.circularSpeed(r) * 1.22;
+    game.ship.x = r; game.ship.y = 0;
+    game.ship.vx = 0; game.ship.vy = v;
+    game.ship.angle = Math.PI / 2;
+    game.ship.landed = false;
+    game.missionTime = 2450;
+    game.warpIndex = 5;
+  }
+  if (screen === 'map') game.mapView = true;
+  if (screen === 'result') {
+    place(60, 0.05, -1.2, 0.3);
+    game.lastTouchdown = {
+      speed: 1.42, tiltDeg: 2.3, pad: game.body.pads[0],
+      limitSpeed: 7.4, limitAngle: 21, slope: 0.4,
+    };
+    game.missionTime = 1840;
+    game.ship.sampleMass = 240;
+    for (const o of game.mission.objectives) o.done = true;
+    game.mission.activeIndex = game.mission.objectives.length;
+    game.succeed();
+  }
+  game.updateCamera(10);   // snap the camera rather than easing into place
 }
 
-game.update(1 / 60);
 game.draw(1 / 60);
 document.title = 'ready';
 </script>

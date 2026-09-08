@@ -7,12 +7,15 @@ The long-term target the campaign builds toward: **launch from Earth in a
 multi-stage craft, transfer to the Moon, land, launch again, return to Earth.**
 Then Mars, with sample return trading payload mass against reward.
 
+Tagged versions: `v0.1.0` the flat-world arcade lander, `v0.2.0` the orbital
+rewrite.
+
 ---
 
-## Phase 1 — Orbital core `[~]`
+## Phase 1 — Orbital core `[x]`
 
-Replace the flat-ground, constant-gravity world with a planet-centred inertial
-frame. This is the load-bearing change; everything else depends on it.
+Replaced the flat-ground, constant-gravity world with a planet-centred
+inertial frame. This was the load-bearing change; everything else depends on it.
 
 - [x] `util.js` — vector/angle helpers, distance/speed/mass/time formatting
 - [x] `orbit.js` — state vector ↔ conic elements, Kepler propagation,
@@ -23,105 +26,113 @@ frame. This is the load-bearing change; everything else depends on it.
 - [x] `design.js` — multi-stage design model and derived performance
 - [x] `ship.js` — planet-centric position, inertial attitude, radial gravity,
       staging, gimbal steering, atmospheric drag
-- [ ] `mission.js`, `game.js` rewrite — the game does not run yet
-- [ ] Retire `terrain.js`, `loadout.js`, `shop.js`
+- [x] Retired `terrain.js`, `loadout.js`, `shop.js`
 
-**Verified** (`scratchpad/orbittest.mjs`, `scratchpad/physicstest.mjs`):
-conic round-trips and energy conservation to ~1e-15 over 500 chained
-propagations; retrograde and hyperbolic cases; circular orbit holds radius to
-0.0 m over a full orbit; numerical coast agrees with analytic propagation to
-6 m over 900 s; staging beats a single stage of equal propellant; a single
-stage cannot reach Earth orbit (6222 m/s) but three stages can (14245 m/s).
+**Verified:** conic round-trips and energy conservation to ~1e-15 over 500
+chained propagations; retrograde and hyperbolic cases; circular orbit holds
+radius to 0.0 m over a full orbit; numerical coast agrees with analytic
+propagation to 6 m over 900 s.
 
-**Done when:** the existing "drop and land" gameplay works unchanged on a round
-planet with inverse-square gravity.
+## Phase 2 — Camera, orbit display, colour `[x]`
 
-## Phase 2 — Camera, orbit display, colour `[ ]`
-
-- [ ] Log-scale auto-zoom camera: ~5 px/m on touchdown to whole-planet views
-- [ ] Camera rotates so local "up" is screen up in flight view
-- [ ] Planet drawn by sampling `radius(θ)` across the visible arc — curvature
+- [x] Log-ranged auto-zoom camera: the ship holds a comfortable on-screen size
+      when low, then altitude becomes what has to fit
+- [x] Camera rotates so local "up" is screen up in flight view
+- [x] Planet drawn by sampling `radius(θ)` across the visible arc — curvature
       and the full disc both fall out of one code path
-- [ ] Projected orbit drawn as a conic, with apoapsis/periapsis markers
-- [ ] `M` toggles a map view framed on the whole orbit
-- [ ] Colour palette (still line art, per-body surface colours, orbit cyan,
-      apoapsis/periapsis markers, amber warnings)
+- [x] Projected orbit drawn as a conic, with apoapsis/periapsis markers and an
+      IMPACT marker when periapsis is underground
+- [x] `M` toggles a map view framed on the whole orbit
+- [x] Colour palette: per-body surface colours, cyan trajectory, blue/orange
+      apsis markers, amber warnings, orange flame
 
-**Done when:** you can watch the horizon curve as you climb and see your
-projected orbit close.
+## Phase 3 — Time warp and life support `[x]`
 
-## Phase 3 — Time warp and life support `[ ]`
-
-- [ ] Warp levels 1×…100000×, `,` / `.` to change
-- [ ] Analytic Kepler propagation while coasting (exact at any warp);
-      numerical integration, warp-clamped, while thrusting or in atmosphere
-- [ ] Life support: mass per unit, hours per unit, consumed by mission time,
+- [x] Warp 1×…100000×, `,` / `.` to change, auto-clamped under power, in
+      atmosphere, and near the surface
+- [x] Analytic Kepler propagation while coasting; warp auto-cancels on a
+      periapsis approach so it can never skip the ship through the ground
+- [x] Life support: mass per unit, hours per unit, consumed by mission time,
       depletion ends the mission
-- [ ] HUD: apoapsis/periapsis + time to each, orbital vs surface speed,
-      life support remaining, warp state, prograde/retrograde cue
+- [x] HUD: apoapsis/periapsis + time to each, orbital vs surface velocity
+      split, life support, warp state, prograde cue, downrange-to-pad
 
-**Done when:** a multi-hour orbital mission is playable in minutes.
+## Phase 4 — Multi-stage ships and hangar redesign `[x]`
 
-## Phase 4 — Multi-stage ships and hangar redesign `[ ]`
-
-- [ ] `design.js` — stage list (engine type, engine count, tank size per
+- [x] `design.js` — stage list (engine type, engine count, tank size per
       stage), payload, derived per-stage and total delta-v
-- [ ] Realistic exhaust velocities (~3000 m/s), sea-level vs vacuum
-- [ ] `hangar.js` — stage editor, mission requirements panel, mass budget,
-      rocket silhouette preview, build cost paid per launch
-- [ ] Staging in flight, with a stage indicator and prompt
-- [ ] Retire `loadout.js` / `shop.js`
+- [x] Realistic exhaust velocities, sea-level vs vacuum blending
+- [x] `hangar.js` — stage editor, mission requirements panel, mass budget,
+      readiness checks, rocket silhouette, build cost paid per launch
+- [x] Staging in flight (`X`), stage indicator, empty-stage prompt
+- [x] **Throttle lever** — added because it turned out to be mandatory, not
+      optional: with on/off thrust a large launcher pulls 5 g late in the
+      first stage and tears through max-Q at 450 kPa. `W`/`S` set a persistent
+      throttle, `SPACE` is momentary full thrust, `F` cuts off.
 
-**Done when:** you design a rocket to a stated mission requirement and fly it.
+## Phase 5 — Mission and level system `[x]`
 
-## Phase 5 — Mission and level system `[ ]`
+- [x] `mission.js` — ordered objectives: reach altitude, achieve orbit with a
+      minimum periapsis, land on a named pad, collect sample
+- [x] Campaign series, every level titled
+- [x] Hangar-first flow: requirements shown before you design
+- [x] Landing does not end the flight when objectives remain — the ship rests
+      on the surface and can launch again
 
-- [ ] `mission.js` — ordered objectives: reach altitude, achieve orbit with a
-      minimum periapsis, land on a named pad, return to orbit, collect sample
-- [ ] Campaign series, every level titled
-- [ ] Hangar-first flow: requirements shown before you design
-- [ ] Landing no longer ends the flight when objectives remain — sit on the
-      surface, then launch again
+## Phase 6 — Earth and Mars `[x]`
 
-**Done when:** the Luna campaign runs surface → orbit → round trip → sample
-return.
+- [x] Atmospheric drag, sea-level/vacuum engine performance blending
+- [x] Earth ascent levels (multi-stage genuinely required)
+- [x] Mars descent and sample return levels
+- [x] Economy tuned so every level is affordable (`npm run economy`)
 
-## Phase 6 — Earth and Mars `[ ]`
+**Verified:** a 565 t three-stage launcher reaches a 160 km Earth orbit in
+10.8 minutes with max-Q of 31.4 kPa — the real-world figure is ~30–40 kPa,
+which is a good independent check on the atmosphere model.
 
-- [ ] Atmospheric drag, sea-level/vacuum engine performance blending
-- [ ] Earth ascent levels (multi-stage genuinely required — ~9.4 km/s)
-- [ ] Mars descent and sample return levels
+## Phase 7 — Interplanetary `[ ]` (the capstone, not started)
 
-## Phase 7 — Interplanetary `[ ]` (the capstone)
-
-- [ ] Multi-body: Moon orbiting Earth, n-body acceleration
+- [ ] Multi-body: Moon orbiting Earth, n-body acceleration summation
 - [ ] Trajectory prediction by numerical propagation when no single body
-      dominates
-- [ ] Transfer planning aid (the hard playability problem)
+      dominates (the analytic conic only holds for one attractor)
+- [ ] Transfer planning aid — the real playability problem, and the reason
+      this is its own phase rather than "add a level"
 - [ ] Earth → Moon → Earth mission, sample return economy
+
+The `Body` model is already per-level and the ship integrates whatever
+acceleration it is handed, so the physics side is a contained change. The
+open question is how a player aims a transfer with rotate-and-thrust controls
+and no maneuver nodes.
 
 ---
 
-## Campaign plan
+## Campaign
 
-| # | Title | Body | Mission |
-| --- | --- | --- | --- |
-| 1 | First Light | Luna | Drop from 400 m, land on Pad Alpha |
-| 2 | Descent Profile | Luna | Drop from 3 km with lateral drift |
-| 3 | Hop | Luna | Launch from Alpha, land on Beta 12 km away |
-| 4 | Above the Line | Luna | Surface → 30 km → land safely |
-| 5 | Orbital Insertion | Luna | Surface → orbit, periapsis above 20 km |
-| 6 | Deorbit | Luna | Start in 60 km orbit, deorbit, land on Alpha |
-| 7 | Round Trip | Luna | Surface → orbit → deorbit → land on Beta |
-| 8 | Sample Return | Luna | Land at the crater site, collect, return to orbit |
-| 9 | Thick Air | Earth | Suborbital to 60 km and back |
-| 10 | Earth Orbit | Earth | Surface → orbit, periapsis above 160 km |
-| 11 | Mars Descent | Mars | From orbit, deorbit and land |
-| 12 | Mars Sample Return | Mars | Land, collect, return to orbit |
+| # | Title | Body | Mission | ΔV |
+| --- | --- | --- | --- | --- |
+| 1 | FIRST LIGHT | Luna | Drop from 400 m, land on Pad Alpha | 150 |
+| 2 | DESCENT PROFILE | Luna | Drop from 3 km with lateral drift | 340 |
+| 3 | HOP | Luna | Launch from Alpha, land on Beta 12 km away | 320 |
+| 4 | ABOVE THE LINE | Luna | Surface → 30 km → land safely | 760 |
+| 5 | ORBITAL INSERTION | Luna | Surface → orbit, periapsis above 20 km | 1980 |
+| 6 | DEORBIT | Luna | Start in 60 km orbit, deorbit, land on Alpha | 1950 |
+| 7 | ROUND TRIP | Luna | Surface → orbit → land on Beta | 4000 |
+| 8 | SAMPLE RETURN | Luna | Land at the crater, collect, return to orbit | 4400 |
+| 9 | THICK AIR | Earth | Suborbital to 60 km and back | 2600 |
+| 10 | EARTH ORBIT | Earth | Surface → orbit, periapsis above 160 km | 9400 |
+| 11 | MARS DESCENT | Mars | From 80 km orbit, deorbit and land | 3800 |
+| 12 | MARS SAMPLE RETURN | Mars | Land at Valles, collect, return to orbit | 8200 |
 
-## Deferred, deliberately
+## Known gaps and deferred decisions
 
-- Body rotation (a landed ship has no surface velocity, and there are no
-  launch windows). Revisit with Phase 7.
+- **Not human-playtested.** Everything is verified by autopilots and
+  screenshots. The difficulty curve, especially levels 9 and 10, is a guess
+  until someone flies it. Earth ascent needs a real gravity turn and is a
+  large step up from Luna.
+- **Body rotation is not modelled.** A landed ship has no surface velocity and
+  there are no launch windows. Revisit with Phase 7, where it starts to matter.
 - Rendezvous and docking.
-- Reusable/recovered stages in the economy.
+- Reusable/recovered stages in the economy (currently a lost vehicle refunds
+  90%, and credits are floored so a losing streak can never dead-end).
+- Mobile/touch controls. Input already goes through semantic actions, so this
+  attaches in `input.js` without touching game logic.

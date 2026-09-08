@@ -1,6 +1,6 @@
 // Keyboard state. Held keys drive flight; edge-triggered presses drive menus.
-// Touch controls will hook in here later for mobile -- game code only ever
-// reads the semantic actions below, never raw key codes.
+// Game code only ever reads the semantic actions below, never raw key codes,
+// so touch controls for mobile attach here without touching game logic.
 //
 // A key can fire more than one action: Up/W is both "thrust" in flight and
 // "move up" in a menu, and the two contexts never overlap.
@@ -8,14 +8,23 @@
 const KEY_MAP = {
   ArrowLeft: ['left'], KeyA: ['left'],
   ArrowRight: ['right'], KeyD: ['right'],
-  ArrowUp: ['thrust', 'up'], KeyW: ['thrust', 'up'],
-  ArrowDown: ['down'], KeyS: ['down'],
-  Space: ['thrust'],
+  ArrowUp: ['throttleUp', 'up'], KeyW: ['throttleUp', 'up'],
+  ArrowDown: ['throttleDown', 'down'], KeyS: ['throttleDown', 'down'],
+  // Momentary full thrust, so a landing can still be flown by tapping one key.
+  Space: ['boost'],
+  KeyF: ['cutoff'],
   Enter: ['confirm'],
   Escape: ['back'],
   KeyH: ['hud'],
+  KeyM: ['map'],
   KeyR: ['restart'],
-  KeyU: ['shop'],
+  KeyU: ['launch'],
+  KeyX: ['stage'],
+  KeyN: ['addStage'],
+  Comma: ['warpDown'],
+  Period: ['warpUp'],
+  BracketLeft: ['warpDown'],
+  BracketRight: ['warpUp'],
 };
 
 export class Input {

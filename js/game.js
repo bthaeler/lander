@@ -1,27 +1,29 @@
 import {
-  FIXED_DT, LEVELS, PLANETS, ZOOM, OFF_PAD_MULTIPLIER, OFF_PAD_TOLERANCE_SCALE,
+  FIXED_DT, LEVELS, BODIES, COLORS, WARP_LEVELS, WARP_MAX_POWERED,
+  WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION,
+  RCS_TIERS, LEG_TIERS, SAMPLE_MASS, STARTING_CREDITS,
+  MAX_TOUCHDOWN_SPIN, OFF_PAD_MULTIPLIER, OFF_PAD_TOLERANCE_SCALE,
   MAX_OFF_PAD_SLOPE_DEG,
 } from './config.js';
-import { createLoadout, shipStats } from './loadout.js';
-import { generateTerrain } from './terrain.js';
+import { Body } from './body.js';
 import { Ship } from './ship.js';
+import { Mission } from './mission.js';
+import { Hangar } from './hangar.js';
+import { createDesign, designStats } from './design.js';
+import { elementsFromState, propagate, timeToPeriapsis } from './orbit.js';
 import { drawHUD, telemetry, HUD_LAYOUTS } from './hud.js';
-import { Hangar } from './shop.js';
-import { clamp, wrapAngle, DEG } from './util.js';
+import { clamp, wrapAngle, DEG, fmtTime, fmtMass } from './util.js';
 
-const STATE = {
-  BRIEFING: 'briefing',
-  FLYING: 'flying',
-  RESULT: 'result',
-  HANGAR: 'hangar',
-  COMPLETE: 'complete',
-};
+const STATE = { HANGAR: 'hangar', FLYING: 'flying', RESULT: 'result', COMPLETE: 'complete' };
 
-// A ship still rotating fast at touchdown will tip over regardless of how
-// upright it happened to be at the instant of contact.
-const MAX_TOUCHDOWN_SPIN = 0.55; // rad/s
-const BOUNDARY_MARGIN = 40;      // metres of world edge that count as off-course
-const CEILING_ABOVE_START = 450; // metres
+// Escaping this far means the mission is unrecoverable.
+const ESCAPE_RADIUS_FACTOR = 60;
+// Refund on a lost vehicle, as "recovered hardware". The economy exists to
+// constrain what you can design, not to punish crashes -- a losing streak
+// must never leave the campaign unwinnable.
+const LOSS_REFUND = 0.9;
+// Seconds to sweep the throttle lever end to end.
+const THROTTLE_RATE = 1 / 1.3;
 
 export class Game {
   constructor(renderer, input) {
@@ -30,76 +32,135 @@ export class Game {
     this.hangar = new Hangar();
     this.hudLayout = 0;
     this.hudLabelTime = 0;
-    this.accumulator = 0;
+    this.titleTime = 0;
     this.time = 0;
-    this.newTier = 0;
+    this.mapView = false;
+    this.warpIndex = 0;
+    this.throttle = 0;
+    this.message = '';
+    this.messageTime = 0;
     this.restart();
   }
 
   restart() {
     this.session = {
-      credits: 0,
-      loadout: createLoadout(),
+      credits: STARTING_CREDITS,
       levelIndex: 0,
-      totalCredits: 0,
+      design: createDesign(),
+      totalEarned: 0,
       landings: 0,
-      crashes: 0,
+      losses: 0,
     };
-    // Tier 1 is the baseline look, so it is never announced as an unlock.
-    this.lastTier = 1;
     this.loadLevel(0);
-    this.state = STATE.BRIEFING;
+    this.state = STATE.HANGAR;
   }
 
   get level() { return LEVELS[this.session.levelIndex]; }
-  get planet() { return PLANETS[this.level.planet]; }
 
-  /** Touchdown envelope for the current level including landing-gear bonuses. */
-  get tolerance() {
-    const stats = shipStats(this.session.loadout);
+  /** Touchdown envelope including landing-gear bonuses. */
+  get envelope() {
+    const legs = LEG_TIERS[this.session.design.legs];
     return {
-      speed: this.level.tolerance.speed + stats.speedBonus,
-      angle: this.level.tolerance.angle + stats.angleBonus,
+      speed: this.level.envelope.speed + legs.speedBonus,
+      angle: this.level.envelope.angle + legs.angleBonus,
     };
   }
 
   loadLevel(index) {
     this.session.levelIndex = index;
     const level = LEVELS[index];
-    this.terrain = generateTerrain(level, (Date.now() ^ (index * 7919)) >>> 0);
-
-    const stats = shipStats(this.session.loadout);
-    const pad = this.terrain.pads[0];
-    const spawnX = clamp(
-      pad.cx + (Math.random() - 0.5) * 2 * level.startOffset,
-      120, this.terrain.width - 120
-    );
-    const spawnY = this.terrain.heightAt(spawnX) + level.startAltitude;
-
-    this.ship = new Ship(stats, {
-      x: spawnX,
-      y: spawnY,
-      vx: (Math.random() < 0.5 ? -1 : 1) * level.startDrift * (0.6 + Math.random() * 0.4),
-      vy: -level.startDrift * 0.35,
-      angle: 0,
-    });
-
-    this.spawnY = spawnY;
-    this.r.scale = ZOOM.far;   // start wide; updateCamera zooms in on descent
+    this.body = new Body(BODIES[level.body]);
+    this.mission = new Mission(level, this.body);
+    this.ship = null;
     this.debris = [];
+    this.jetsam = [];
     this.result = null;
-    this.accumulator = 0;
-
-    this.newTier = level.graphicsTier > this.lastTier ? level.graphicsTier : 0;
-    this.lastTier = Math.max(this.lastTier, level.graphicsTier);
+    this.missionTime = 0;
+    this.lifeRemaining = 0;
+    this.warpIndex = 0;
+    this.mapView = false;
     this.r.setTier(level.graphicsTier);
+    this.hangar.reset();
   }
 
-  // --- main loop hooks -------------------------------------------------------
+  // --- launching -------------------------------------------------------------
+
+  launch() {
+    const level = this.level;
+    const stats = designStats(this.session.design, this.body);
+    if (stats.cost > this.session.credits) {
+      this.hangar.flash('CANNOT AFFORD THIS VEHICLE');
+      return;
+    }
+    this.session.credits -= stats.cost;
+    this.buildCost = stats.cost;
+
+    const spawn = this.spawnState(level, stats);
+    this.ship = new Ship(this.session.design, stats.payload.mass, spawn);
+    this.ship.rcsTorque = RCS_TIERS[this.session.design.rcs].torque;
+    if (level.start.type === 'surface') this.ship.settle(this.body);
+
+    this.throttle = 0;
+    this.lifeRemaining = stats.lifeSeconds;
+    this.lifeTotal = stats.lifeSeconds;
+    this.startFuel = this.ship.totalFuel;
+    this.missionTime = 0;
+    this.warpIndex = 0;
+    this.mapView = false;
+    this.debris = [];
+    this.jetsam = [];
+    this.titleTime = 3.6;
+    this.r.scale = 1;
+    this.updateCamera(1);
+    this.state = STATE.FLYING;
+  }
+
+  spawnState(level, stats) {
+    const body = this.body;
+    const s = level.start;
+    const pad = s.pad ? body.padByName(s.pad) : body.pads[0];
+
+    if (s.type === 'orbit') {
+      const theta = pad.theta - (s.leadAngle || 0);
+      const r = body.radius + s.altitude;
+      const v = body.circularSpeed(r);
+      return {
+        x: r * Math.cos(theta), y: r * Math.sin(theta),
+        // Prograde is counter-clockwise: velocity is +90 degrees from radial.
+        vx: -v * Math.sin(theta), vy: v * Math.cos(theta),
+        angle: theta + Math.PI / 2,
+      };
+    }
+
+    if (s.type === 'surface') {
+      const theta = pad.theta;
+      const r = pad.r + stats.length / 2 + 2;
+      return {
+        x: r * Math.cos(theta), y: r * Math.sin(theta),
+        vx: 0, vy: 0,
+        angle: theta,
+      };
+    }
+
+    // 'drop'
+    const offset = (s.offset || 0) * (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 0.4);
+    const theta = pad.theta + offset / body.radius;
+    const r = body.surfaceRadius(theta) + s.altitude;
+    const drift = (s.drift || 0) * (Math.random() < 0.5 ? -1 : 1);
+    return {
+      x: r * Math.cos(theta), y: r * Math.sin(theta),
+      vx: -drift * Math.sin(theta), vy: drift * Math.cos(theta),
+      angle: theta,
+    };
+  }
+
+  // --- main loop -------------------------------------------------------------
 
   update(dt) {
     this.time += dt;
     if (this.hudLabelTime > 0) this.hudLabelTime -= dt;
+    if (this.titleTime > 0) this.titleTime -= dt;
+    if (this.messageTime > 0) this.messageTime -= dt;
     this.hangar.update(dt);
 
     if (this.input.wasPressed('hud')) {
@@ -108,10 +169,9 @@ export class Game {
     }
 
     switch (this.state) {
-      case STATE.BRIEFING: this.updateBriefing(); break;
+      case STATE.HANGAR: this.updateHangar(); break;
       case STATE.FLYING: this.updateFlying(dt); break;
       case STATE.RESULT: this.updateResult(dt); break;
-      case STATE.HANGAR: this.updateHangar(); break;
       case STATE.COMPLETE:
         if (this.input.wasPressed('restart') || this.input.wasPressed('confirm')) this.restart();
         break;
@@ -119,94 +179,159 @@ export class Game {
     this.updateCamera(dt);
   }
 
-  updateBriefing() {
-    if (this.input.wasPressed('thrust') || this.input.wasPressed('confirm')) {
-      this.state = STATE.FLYING;
-    }
+  updateHangar() {
+    const action = this.hangar.handle(this.input, this.session, this.body, this.level);
+    if (action === 'launch') this.launch();
   }
 
+  flash(msg, seconds = 3) {
+    this.message = msg;
+    this.messageTime = seconds;
+  }
+
+  // --- flight ----------------------------------------------------------------
+
   updateFlying(dt) {
-    if (this.input.wasPressed('restart')) { this.loadLevel(this.session.levelIndex); return; }
+    const ship = this.ship;
+    const body = this.body;
+
+    if (this.input.wasPressed('restart')) { this.abort(); return; }
+    if (this.input.wasPressed('map')) this.mapView = !this.mapView;
+    if (this.input.wasPressed('stage') && ship.jettison()) {
+      this.spawnJetsam();
+      this.flash('STAGE SEPARATION', 1.6);
+    }
+
+    // Throttle is a persistent lever, not a button: an orbital burn can run
+    // for minutes and needs a held setting. SPACE is a momentary full-thrust
+    // override so a landing can still be flown by tapping one key.
+    const trim = THROTTLE_RATE * dt;
+    if (this.input.isDown('throttleUp')) this.throttle = clamp(this.throttle + trim, 0, 1);
+    if (this.input.isDown('throttleDown')) this.throttle = clamp(this.throttle - trim, 0, 1);
+    if (this.input.wasPressed('cutoff')) this.throttle = 0;
 
     const cmd = {
       rotate: (this.input.isDown('right') ? 1 : 0) - (this.input.isDown('left') ? 1 : 0),
-      throttle: this.input.isDown('thrust') ? 1 : 0,
+      throttle: this.input.isDown('boost') ? 1 : this.throttle,
     };
 
-    this.accumulator += Math.min(dt, 0.25);
-    while (this.accumulator >= FIXED_DT) {
-      this.ship.step(FIXED_DT, this.planet.gravity, cmd);
-      this.accumulator -= FIXED_DT;
-      if (this.checkContact()) break;
-      if (this.checkBounds()) break;
+    const altitude = body.altitudeAt(ship.x, ship.y);
+    const powered = cmd.throttle > 0 || ship.spool > 1e-3;
+    const inAir = body.density(altitude) > 1e-7;
+    const low = altitude < body.radius * LOW_ALTITUDE_FRACTION;
+
+    this.applyWarpInput(powered, inAir, low || ship.landed);
+    const warp = WARP_LEVELS[this.warpIndex];
+    const simDt = dt * warp;
+
+    // Coasting outside an atmosphere is advanced analytically -- exact at any
+    // warp factor. Anything else has to be integrated.
+    let useKepler = !powered && !inAir && !ship.landed && warp > 10;
+    if (useKepler) {
+      const el = elementsFromState(ship.x, ship.y, ship.vx, ship.vy, body.mu);
+      // Never let warp skip the ship through the ground.
+      const danger = el.periapsis < body.radius + 25000;
+      if (danger && timeToPeriapsis(el) < simDt * 2.5) {
+        this.warpIndex = 0;
+        this.flash('WARP CANCELLED — PERIAPSIS APPROACH', 2.5);
+        useKepler = false;
+      }
+    }
+
+    if (useKepler) {
+      const res = propagate(ship.x, ship.y, ship.vx, ship.vy, body.mu, simDt);
+      if (res) {
+        ship.x = res.x; ship.y = res.y; ship.vx = res.vx; ship.vy = res.vy;
+        ship.angle = wrapAngle(ship.angle + ship.omega * simDt);
+        ship.spool = 0;
+        ship.elapsed += simDt;
+      } else {
+        this.integrate(simDt, cmd);
+      }
+    } else {
+      this.integrate(simDt, cmd);
+    }
+
+    if (this.state !== STATE.FLYING) return;
+
+    this.missionTime += simDt;
+    this.lifeRemaining -= simDt;
+    this.stepJetsam(Math.min(simDt, 2));
+
+    if (this.lifeRemaining <= 0) { this.fail('LIFE SUPPORT EXHAUSTED'); return; }
+    if (ship.radiusFromCentre > body.radius * ESCAPE_RADIUS_FACTOR) {
+      this.fail('LOST — ESCAPED THE BODY'); return;
+    }
+
+    this.evaluateMission();
+  }
+
+  /** Fixed-step integration, with the substep count bounded. */
+  integrate(simDt, cmd) {
+    let steps = Math.ceil(simDt / FIXED_DT);
+    let h = FIXED_DT;
+    const MAX_STEPS = 500;
+    if (steps > MAX_STEPS) { steps = MAX_STEPS; h = simDt / MAX_STEPS; }
+    for (let i = 0; i < steps; i++) {
+      this.ship.step(h, this.body, cmd);
+      if (!this.ship.landed && this.checkContact()) return;
     }
   }
 
-  updateResult(dt) {
-    this.stepDebris(dt);
-    if (!(this.input.wasPressed('thrust') || this.input.wasPressed('confirm'))) return;
+  applyWarpInput(powered, inAir, low) {
+    let maxIdx = WARP_LEVELS.length - 1;
+    if (powered) maxIdx = WARP_MAX_POWERED;
+    else if (inAir) maxIdx = WARP_MAX_ATMOSPHERE;
+    else if (low) maxIdx = WARP_MAX_LOW;
 
-    if (!this.result.success) {
-      this.loadLevel(this.session.levelIndex);
-      this.state = STATE.BRIEFING;
-      return;
+    if (this.input.wasPressed('warpUp')) {
+      if (this.warpIndex >= maxIdx) {
+        this.flash(powered ? 'CANNOT WARP UNDER POWER'
+          : inAir ? 'CANNOT WARP IN ATMOSPHERE' : 'TOO LOW TO WARP FURTHER', 2);
+      } else this.warpIndex += 1;
     }
-    const next = this.session.levelIndex + 1;
-    if (next >= LEVELS.length) {
-      this.state = STATE.COMPLETE;
-      return;
-    }
-    this.session.upcomingLevel = LEVELS[next];
-    this.session.levelIndex = next;
-    this.hangar.reset();
-    this.state = STATE.HANGAR;
+    if (this.input.wasPressed('warpDown') && this.warpIndex > 0) this.warpIndex -= 1;
+    if (this.warpIndex > maxIdx) this.warpIndex = maxIdx;
   }
 
-  updateHangar() {
-    this.session.upcomingLevel = LEVELS[this.session.levelIndex];
-    if (this.hangar.handle(this.input, this.session) === 'launch') {
-      this.loadLevel(this.session.levelIndex);
-      this.state = STATE.BRIEFING;
-    }
-  }
-
-  updateCamera(dt) {
+  evaluateMission() {
     const ship = this.ship;
-    if (!ship) return;
+    const body = this.body;
+    const el = elementsFromState(ship.x, ship.y, ship.vx, ship.vy, body.mu);
+    const theta = Math.atan2(ship.y, ship.x);
 
-    // Zoom in on the way down. Interpolating on sqrt(altitude) keeps the
-    // change gradual high up and quicker over the last hundred metres.
-    const alt = Math.max(0, ship.clearance(this.terrain));
-    const span = Math.sqrt(ZOOM.farAlt) - Math.sqrt(ZOOM.nearAlt);
-    const t = clamp((Math.sqrt(clamp(alt, ZOOM.nearAlt, ZOOM.farAlt)) - Math.sqrt(ZOOM.nearAlt)) / span, 0, 1);
-    const target = ZOOM.near + (ZOOM.far - ZOOM.near) * t;
-    this.r.scale += (target - this.r.scale) * Math.min(1, dt * ZOOM.rate);
+    const events = this.mission.evaluate({
+      altitude: body.altitudeAt(ship.x, ship.y),
+      elements: el,
+      landed: ship.landed,
+      landedPad: ship.landed ? body.padAt(theta) : null,
+    });
 
-    const groundY = this.terrain.heightAt(ship.x);
-    // Keep the ship centred while high, then let the ground settle into the
-    // lower third of the screen as it comes down.
-    const minCamY = groundY + this.r.halfViewH * 0.5;
-    this.r.camera.x = ship.x;
-    this.r.camera.y = Math.max(ship.y, minCamY);
+    for (const e of events) {
+      if (e.type === 'sample') {
+        ship.sampleMass += SAMPLE_MASS;
+        this.flash(`SAMPLE ABOARD — +${SAMPLE_MASS} KG`, 3);
+      } else {
+        this.flash(`OBJECTIVE COMPLETE — ${e.objective.label}`, 3);
+      }
+    }
+
+    if (this.mission.complete) this.succeed();
   }
 
-  // --- contact and failure ---------------------------------------------------
+  // --- contact ---------------------------------------------------------------
 
   /** @returns {boolean} true if the flight ended this step. */
   checkContact() {
     const ship = this.ship;
+    const body = this.body;
 
-    // Any part of the hull touching the ground is an immediate loss.
-    for (const p of ship.bodyPoints()) {
-      if (p.y <= this.terrain.heightAt(p.x)) {
-        this.fail('HULL IMPACT');
-        return true;
-      }
+    for (const p of ship.hullPoints()) {
+      if (body.altitudeAt(p.x, p.y) <= 0) { this.fail('HULL IMPACT'); return true; }
     }
 
     const feet = ship.footPoints();
-    const contact = feet.filter((p) => p.y <= this.terrain.heightAt(p.x));
-    if (contact.length === 0) return false;
+    if (!feet.some((p) => body.altitudeAt(p.x, p.y) <= 0)) return false;
 
     this.evaluateTouchdown(feet);
     return true;
@@ -214,117 +339,143 @@ export class Game {
 
   evaluateTouchdown(feet) {
     const ship = this.ship;
+    const body = this.body;
     const speed = ship.speed;
-    const angleDeg = wrapAngle(ship.angle) * DEG;
-    const absAngle = Math.abs(angleDeg);
-    const midX = (feet[0].x + feet[1].x) / 2;
+    const tiltDeg = Math.abs(ship.tilt) * DEG;
+    const thetas = feet.map((p) => Math.atan2(p.y, p.x));
+    const midTheta = Math.atan2(
+      (Math.sin(thetas[0]) + Math.sin(thetas[1])) / 2,
+      (Math.cos(thetas[0]) + Math.cos(thetas[1])) / 2
+    );
 
-    const padA = this.terrain.padAt(feet[0].x);
-    const padB = this.terrain.padAt(feet[1].x);
-    const onPad = padA && padB && padA === padB;
-    const pad = onPad ? padA : null;
+    const padA = body.padAt(thetas[0]);
+    const padB = body.padAt(thetas[1]);
+    const pad = padA && padB && padA === padB ? padA : null;
 
-    const tol = this.tolerance;
-    const scale = onPad ? 1 : OFF_PAD_TOLERANCE_SCALE;
-    const limitSpeed = tol.speed * scale;
-    const limitAngle = tol.angle * scale;
-    const slope = Math.abs(this.terrain.slopeDegAt(midX));
+    const env = this.envelope;
+    const scale = pad ? 1 : OFF_PAD_TOLERANCE_SCALE;
+    const limitSpeed = env.speed * scale;
+    const limitAngle = env.angle * scale;
+    const slope = Math.abs(body.slopeAt(midTheta) * DEG);
 
     let reason = null;
     if (speed > limitSpeed) reason = 'IMPACT SPEED TOO HIGH';
-    else if (absAngle > limitAngle) reason = 'TOUCHED DOWN TOO STEEP';
-    else if (Math.abs(ship.omega) > MAX_TOUCHDOWN_SPIN) reason = 'STILL ROTATING -- TIPPED OVER';
-    else if (!onPad && slope > MAX_OFF_PAD_SLOPE_DEG) reason = 'GROUND TOO STEEP';
+    else if (tiltDeg > limitAngle) reason = 'TOUCHED DOWN TOO STEEP';
+    else if (Math.abs(ship.omega) > MAX_TOUCHDOWN_SPIN) reason = 'STILL ROTATING — TIPPED OVER';
+    else if (!pad && slope > MAX_OFF_PAD_SLOPE_DEG) reason = 'GROUND TOO STEEP';
+
+    this.lastTouchdown = { speed, tiltDeg, pad, limitSpeed, limitAngle, slope };
 
     if (reason) {
-      this.fail(reason, { speed, angleDeg, onPad, limitSpeed, limitAngle, slope });
+      this.fail(reason, { speed, tiltDeg, limitSpeed, limitAngle });
       return;
     }
 
-    // Settle the ship exactly onto the surface and stop it dead.
-    const drop = Math.min(
-      ...feet.map((p) => p.y - this.terrain.heightAt(p.x))
-    );
-    ship.y -= drop;
-    ship.vx = 0; ship.vy = 0; ship.omega = 0; ship.spool = 0;
+    ship.settle(body);
+    this.session.landings += 1;
+    this.flash(pad ? `TOUCHDOWN — ${pad.label}` : 'TOUCHDOWN', 3);
+    this.evaluateMission();
+  }
 
-    const quality = clamp(
-      1 - 0.5 * (speed / limitSpeed) - 0.5 * (absAngle / limitAngle), 0, 1
-    );
-    const mult = onPad ? pad.mult : OFF_PAD_MULTIPLIER;
-    // Bonus is on the *fraction* of propellant saved, not the mass -- otherwise
-    // hauling an oversized tank you never burn would pay for itself.
-    const fuelFraction = ship.fuel / ship.stats.fuelCapacity;
-    const fuelBonus = Math.round(this.level.reward * 0.3 * fuelFraction);
-    const credits = Math.round(this.level.reward * (0.45 + 0.55 * quality) * mult) + fuelBonus;
+  // --- outcomes --------------------------------------------------------------
+
+  succeed() {
+    const ship = this.ship;
+    const td = this.lastTouchdown;
+    const level = this.level;
+
+    // Quality is judged on the touchdown if there was one, otherwise on how
+    // much propellant is left.
+    let quality;
+    if (td) {
+      quality = clamp(1 - 0.5 * (td.speed / td.limitSpeed)
+        - 0.5 * (td.tiltDeg / td.limitAngle), 0, 1);
+    } else {
+      quality = clamp(ship.totalFuel / Math.max(1, this.startFuel || 1), 0, 1) * 0.6 + 0.4;
+    }
+    const padMult = td && td.pad ? td.pad.mult : (td ? OFF_PAD_MULTIPLIER : 1);
+    const fuelFraction = ship.totalFuel / Math.max(1, this.startFuel || ship.totalFuel || 1);
+    const fuelBonus = Math.round(level.reward * 0.25 * clamp(fuelFraction, 0, 1));
+    const credits = Math.round(level.reward * (0.5 + 0.5 * quality) * padMult) + fuelBonus;
 
     this.session.credits += credits;
-    this.session.totalCredits += credits;
-    this.session.landings += 1;
+    this.session.totalEarned += credits;
 
     this.result = {
       success: true,
-      speed, angleDeg, onPad, mult, quality, credits, fuelBonus,
-      limitSpeed, limitAngle, slope,
-      fuel: ship.fuel,
+      quality,
+      credits,
+      fuelBonus,
+      padMult,
+      touchdown: td,
+      fuelLeft: ship.totalFuel,
+      missionTime: this.missionTime,
+      lifeLeft: this.lifeRemaining,
+      sample: ship.sampleMass,
       rating: ratingFor(quality),
-      time: ship.elapsed,
     };
     this.state = STATE.RESULT;
   }
 
   fail(reason, detail = {}) {
-    this.session.crashes += 1;
-    this.spawnDebris();
+    this.session.losses += 1;
+    const cost = this.buildCost || 0;
+    const refund = Math.round(cost * LOSS_REFUND);
+    this.session.credits += refund;
+    // Guarantee you can always rebuild the vehicle you just lost.
+    if (this.session.credits < cost) this.session.credits = cost;
+
+    if (this.ship) this.spawnDebris();
     this.result = {
       success: false,
       reason,
-      speed: detail.speed ?? this.ship.speed,
-      angleDeg: detail.angleDeg ?? wrapAngle(this.ship.angle) * DEG,
-      onPad: detail.onPad ?? false,
-      limitSpeed: detail.limitSpeed ?? this.tolerance.speed,
-      limitAngle: detail.limitAngle ?? this.tolerance.angle,
-      fuel: this.ship.fuel,
-      time: this.ship.elapsed,
+      refund,
+      touchdown: this.lastTouchdown,
+      detail,
+      fuelLeft: this.ship ? this.ship.totalFuel : 0,
+      missionTime: this.missionTime,
+      objectives: this.mission.objectives,
     };
     this.state = STATE.RESULT;
   }
 
-  checkBounds() {
-    const ship = this.ship;
-    if (ship.x < BOUNDARY_MARGIN || ship.x > this.terrain.width - BOUNDARY_MARGIN) {
-      this.fail('DRIFTED OUT OF THE LANDING ZONE');
-      return true;
-    }
-    if (ship.y > this.spawnY + CEILING_ABOVE_START) {
-      this.fail('CLIMBED OUT OF THE APPROACH CORRIDOR');
-      return true;
-    }
-    return false;
+  abort() {
+    this.flash('MISSION ABORTED', 2);
+    this.fail('ABORTED BY CREW');
   }
 
-  get outOfBounds() {
-    const ship = this.ship;
-    const near = BOUNDARY_MARGIN * 3;
-    return ship.x < near || ship.x > this.terrain.width - near ||
-      ship.y > this.spawnY + CEILING_ABOVE_START * 0.8;
+  updateResult(dt) {
+    this.stepDebris(dt);
+    if (!(this.input.wasPressed('confirm') || this.input.wasPressed('boost'))) return;
+
+    if (!this.result.success) {
+      this.loadLevel(this.session.levelIndex);
+      this.state = STATE.HANGAR;
+      return;
+    }
+    const next = this.session.levelIndex + 1;
+    if (next >= LEVELS.length) { this.state = STATE.COMPLETE; return; }
+    this.loadLevel(next);
+    this.state = STATE.HANGAR;
   }
+
+  // --- debris ----------------------------------------------------------------
 
   spawnDebris() {
     const ship = this.ship;
     const pieces = [];
-    const points = [...ship.bodyPoints(), ...ship.footPoints()];
-    for (let i = 0; i < 14; i++) {
-      const p = points[i % points.length];
+    const pts = [...ship.hullPoints(), ...ship.footPoints()];
+    const spread = Math.max(4, ship.length * 1.5);
+    for (let i = 0; i < 16; i++) {
+      const p = pts[i % pts.length];
       const dir = Math.random() * Math.PI * 2;
-      const spread = 6 + Math.random() * 14;
       pieces.push({
         x: p.x, y: p.y,
         vx: ship.vx * 0.3 + Math.cos(dir) * spread,
-        vy: Math.abs(ship.vy) * 0.15 + Math.sin(dir) * spread * 0.8 + 6,
+        vy: ship.vy * 0.3 + Math.sin(dir) * spread,
         angle: Math.random() * Math.PI,
         omega: (Math.random() - 0.5) * 8,
-        len: 1.4 + Math.random() * 3.4,
+        len: ship.length * (0.08 + Math.random() * 0.22),
         life: 1,
       });
     }
@@ -332,22 +483,94 @@ export class Game {
   }
 
   stepDebris(dt) {
-    const g = this.planet.gravity;
+    const body = this.body;
     for (const p of this.debris) {
       if (p.life <= 0) continue;
-      p.vy -= g * dt;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
+      const g = body.gravityAt(p.x, p.y);
+      p.vx += g.ax * dt; p.vy += g.ay * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
       p.angle += p.omega * dt;
-      const ground = this.terrain.heightAt(p.x);
-      if (p.y < ground) {
-        p.y = ground;
-        p.vy *= -0.25;
-        p.vx *= 0.6;
+      if (body.altitudeAt(p.x, p.y) < 0) {
+        const r = Math.hypot(p.x, p.y);
+        const sr = body.surfaceRadius(Math.atan2(p.y, p.x));
+        p.x *= sr / r; p.y *= sr / r;
+        p.vx *= 0.4; p.vy *= -0.25;
         p.omega *= 0.5;
       }
-      p.life -= dt * 0.45;
+      p.life -= dt * 0.4;
     }
+  }
+
+  spawnJetsam() {
+    const ship = this.ship;
+    const back = ship.toWorld({ x: 0, y: ship.bottom - 2 });
+    this.jetsam.push({
+      x: back.x, y: back.y,
+      vx: ship.vx - Math.cos(ship.angle) * 6,
+      vy: ship.vy - Math.sin(ship.angle) * 6,
+      angle: ship.angle - Math.PI / 2,
+      omega: (Math.random() - 0.5) * 1.2,
+      len: Math.max(2, ship.length * 0.4),
+      rad: Math.max(0.6, ship.maxRadius),
+      life: 1,
+    });
+  }
+
+  stepJetsam(dt) {
+    for (const p of this.jetsam) {
+      if (p.life <= 0) continue;
+      const g = this.body.gravityAt(p.x, p.y);
+      p.vx += g.ax * dt; p.vy += g.ay * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.angle += p.omega * dt;
+      p.life -= dt * 0.06;
+    }
+    this.jetsam = this.jetsam.filter((p) => p.life > 0);
+  }
+
+  // --- camera ----------------------------------------------------------------
+
+  updateCamera(dt) {
+    const r = this.r;
+    const body = this.body;
+    if (!this.ship) {
+      // Hangar: frame the body so there is something behind the panels.
+      r.camera.x = 0; r.camera.y = body.radius * 1.6;
+      r.camera.rot = Math.PI / 2;
+      r.scale = (r.h * 0.5) / (body.radius * 1.2);
+      return;
+    }
+    const ship = this.ship;
+
+    if (this.mapView) {
+      const el = elementsFromState(ship.x, ship.y, ship.vx, ship.vy, body.mu);
+      const far = el.closed && isFinite(el.apoapsis)
+        ? el.apoapsis
+        : Math.max(ship.radiusFromCentre * 2, body.radius * 4);
+      const fit = Math.max(far, ship.radiusFromCentre, body.radius) * 1.25;
+      r.camera.x = 0; r.camera.y = 0;
+      r.camera.rot = 0;
+      const target = (Math.min(r.w, r.h) * 0.5) / fit;
+      r.scale += (target - r.scale) * Math.min(1, dt * 6);
+      return;
+    }
+
+    // Flight view. Keep the ship a comfortable size when low, and zoom out
+    // once altitude, not the ship, is what needs to fit on screen.
+    const alt = Math.max(1, body.altitudeAt(ship.x, ship.y));
+    // Target on-screen ship size scales with the display, so the close view
+    // reads the same on a laptop and a large monitor.
+    const shipScale = (r.h * 0.055) / Math.max(4, ship.length);
+    const altScale = (r.h * 0.40) / alt;
+    const target = clamp(Math.min(shipScale, altScale), 1e-7, 40);
+    const k = Math.min(1, dt * 3.5);
+    r.scale = r.scale > 0 ? r.scale * Math.pow(target / r.scale, k) : target;
+
+    r.camera.x = ship.x;
+    r.camera.y = ship.y;
+    // Local up points to screen up.
+    const wanted = ship.upAngle - Math.PI / 2;
+    r.camera.rot = wanted;
   }
 
   // --- drawing ---------------------------------------------------------------
@@ -356,46 +579,38 @@ export class Game {
     const r = this.r;
     r.clear();
     r.drawStars(dt);
-    r.drawTerrain(this.terrain);
-    this.drawBoundaries();
+    r.drawBody(this.body);
 
     if (this.state === STATE.HANGAR) {
-      this.dim(0.82);
-      this.hangar.draw(r, this.session);
+      this.dim(0.78);
+      this.hangar.draw(r, this.session, this.body, this.level);
       this.drawHudLabel();
       return;
     }
 
-    if (this.debris.length && this.state === STATE.RESULT && !this.result.success) {
-      r.drawDebris(this.debris);
-    } else if (this.ship) {
-      r.drawShip(this.ship);
+    if (this.ship) {
+      const el = elementsFromState(this.ship.x, this.ship.y,
+        this.ship.vx, this.ship.vy, this.body.mu);
+      const showOrbit = this.mapView
+        || this.ship.radiusFromCentre > this.body.radius + this.body.radius * 0.002;
+      if (showOrbit && !this.ship.landed) r.drawOrbit(el, this.body);
     }
 
-    if (this.state === STATE.FLYING || this.state === STATE.BRIEFING) {
-      const t = telemetry(
-        this.ship, this.terrain, this.level, this.tolerance, this.time, this.outOfBounds
-      );
-      drawHUD(r, t, this.hudLayout);
-      this.drawLevelTag();
-    }
+    r.drawJetsam(this.jetsam);
 
-    if (this.state === STATE.BRIEFING) this.drawBriefing();
+    const lost = this.state === STATE.RESULT && !this.result.success;
+    if (lost && this.debris.length) r.drawDebris(this.debris);
+    else if (this.ship) r.drawShip(this.ship);
+
+    if (this.state === STATE.FLYING) {
+      drawHUD(r, telemetry(this), this.hudLayout);
+      this.drawTitleFlash();
+    }
     if (this.state === STATE.RESULT) this.drawResult();
     if (this.state === STATE.COMPLETE) this.drawComplete();
-    this.drawHudLabel();
-  }
 
-  drawBoundaries() {
-    const r = this.r;
-    for (const x of [0, this.terrain.width]) {
-      const top = r.worldToScreen(x, r.camera.y + r.halfViewH);
-      const bottom = r.worldToScreen(x, r.camera.y - r.halfViewH);
-      if (top.x < -20 || top.x > r.w + 20) continue;
-      for (let y = top.y; y < bottom.y; y += 22) {
-        r.lineS(top.x, y, top.x, y + 11, 0.25);
-      }
-    }
+    this.drawMessage();
+    this.drawHudLabel();
   }
 
   dim(alpha) {
@@ -406,122 +621,118 @@ export class Game {
     this.r.reset();
   }
 
+  drawMessage() {
+    if (this.messageTime <= 0) return;
+    this.r.text(this.message, this.r.w / 2, this.r.h * 0.22, {
+      size: 15, align: 'center', color: COLORS.accent,
+      alpha: clamp(this.messageTime, 0, 1),
+    });
+  }
+
   drawHudLabel() {
     if (this.hudLabelTime <= 0) return;
-    this.r.text(`HUD: ${HUD_LAYOUTS[this.hudLayout]}`, this.r.w / 2, this.r.h / 2 + 140, {
+    this.r.text(`HUD: ${HUD_LAYOUTS[this.hudLayout]}`, this.r.w / 2, this.r.h - 60, {
       size: 13, align: 'center', alpha: clamp(this.hudLabelTime, 0, 1) * 0.8,
     });
   }
 
-  drawLevelTag() {
+  drawTitleFlash() {
+    if (this.titleTime <= 0) return;
+    const a = clamp(this.titleTime / 1.4, 0, 1);
     const r = this.r;
-    r.text(
-      `LEVEL ${this.session.levelIndex + 1}/${LEVELS.length}  ${this.level.name}  /  ${this.planet.name}`,
-      r.w / 2, r.h - 14, { size: 11, align: 'center', alpha: 0.4 }
-    );
-  }
-
-  drawBriefing() {
-    const r = this.r;
-    this.dim(0.55);
-    const cx = r.w / 2;
-    let y = r.h / 2 - 130;
-
-    r.text(`LEVEL ${this.session.levelIndex + 1}`, cx, y, { size: 13, align: 'center', alpha: 0.6 });
-    y += 34;
-    r.text(this.level.name, cx, y, { size: 30, align: 'center' });
-    y += 24;
-    r.text(`${this.planet.name}   g = ${this.planet.gravity.toFixed(2)} M/S²`,
-      cx, y, { size: 14, align: 'center', alpha: 0.7 });
-    y += 34;
-    r.text(this.level.brief, cx, y, { size: 13, align: 'center', alpha: 0.6 });
-    y += 34;
-
-    const tol = this.tolerance;
-    r.text(
-      `TOUCHDOWN ENVELOPE   ${tol.speed.toFixed(1)} M/S   ${Math.round(tol.angle)}° FROM VERTICAL`,
-      cx, y, { size: 14, align: 'center' }
-    );
-    y += 22;
-    r.text(`PADS PAY MORE. OFF-PAD LANDINGS ARE SCORED AT ${Math.round(OFF_PAD_MULTIPLIER * 100)}%.`,
-      cx, y, { size: 11, align: 'center', alpha: 0.45 });
-
-    if (this.newTier) {
-      y += 30;
-      r.text(`>> VISUAL FIDELITY TIER ${this.newTier} ONLINE <<`,
-        cx, y, { size: 13, align: 'center', alpha: 0.85 });
+    r.text(`LEVEL ${this.level.id}`, r.w / 2, r.h * 0.36,
+      { size: 13, align: 'center', alpha: a * 0.7 });
+    r.text(this.level.title, r.w / 2, r.h * 0.36 + 34,
+      { size: 30, align: 'center', alpha: a });
+    r.text(this.body.name, r.w / 2, r.h * 0.36 + 58,
+      { size: 13, align: 'center', alpha: a * 0.7 });
+    if (this.session.levelIndex === 0) {
+      r.text('LEFT/RIGHT ROTATE    W/S THROTTLE    SPACE FULL THRUST    F CUTOFF',
+        r.w / 2, r.h * 0.36 + 92, { size: 12, align: 'center', alpha: a * 0.6 });
+      r.text('X STAGE    , . TIME WARP    M MAP    H HUD    R ABORT',
+        r.w / 2, r.h * 0.36 + 112, { size: 12, align: 'center', alpha: a * 0.6 });
     }
-
-    y += 46;
-    r.text('LEFT / RIGHT  ROTATE     UP or SPACE  THRUST     H  HUD LAYOUT     R  RESET',
-      cx, y, { size: 12, align: 'center', alpha: 0.5 });
-    y += 30;
-    r.text('PRESS SPACE TO BEGIN DESCENT', cx, y, {
-      size: 15, align: 'center', alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
-    });
   }
 
   drawResult() {
     const r = this.r;
     const res = this.result;
-    this.dim(0.65);
+    this.dim(0.7);
     const cx = r.w / 2;
-    let y = r.h / 2 - 120;
+    let y = r.h / 2 - 170;
 
-    r.text(res.success ? 'TOUCHDOWN' : 'VEHICLE LOST', cx, y, { size: 32, align: 'center' });
+    const good = res.success;
+    r.text(good ? 'MISSION COMPLETE' : 'VEHICLE LOST', cx, y,
+      { size: 32, align: 'center', color: good ? COLORS.good : COLORS.danger });
     y += 26;
-    if (res.success) {
-      r.text(res.rating, cx, y, { size: 15, align: 'center', alpha: 0.8 });
-    } else {
-      r.text(res.reason, cx, y, { size: 14, align: 'center', alpha: 0.8 });
-    }
-    y += 40;
+    r.text(good ? res.rating : res.reason, cx, y,
+      { size: 15, align: 'center', alpha: 0.85 });
+    y += 38;
 
-    const rows = [
-      ['IMPACT SPEED', `${res.speed.toFixed(2)} M/S`, `LIMIT ${res.limitSpeed.toFixed(1)}`],
-      ['ANGLE FROM VERTICAL', `${Math.abs(res.angleDeg).toFixed(1)}°`, `LIMIT ${Math.round(res.limitAngle)}°`],
-      ['PROPELLANT LEFT', `${res.fuel.toFixed(0)} KG`,
-        `${Math.round((res.fuel / this.ship.stats.fuelCapacity) * 100)}%`],
-      ['FLIGHT TIME', `${res.time.toFixed(1)} S`, ''],
-    ];
-    if (res.success) {
-      rows.push(['LANDING SITE', res.onPad ? `PAD  x${res.mult.toFixed(2)}` : 'OPEN GROUND  x0.60', '']);
+    // Objective checklist.
+    for (const o of this.mission.objectives) {
+      r.text(`${o.done ? '[x]' : '[ ]'}  ${o.label}`, cx - 240, y,
+        { size: 12, alpha: o.done ? 0.9 : 0.4, color: o.done ? COLORS.good : COLORS.ui });
+      y += 19;
+    }
+    y += 14;
+
+    const rows = [];
+    if (res.touchdown) {
+      rows.push(['IMPACT SPEED', `${res.touchdown.speed.toFixed(2)} M/S`,
+        `LIMIT ${res.touchdown.limitSpeed.toFixed(1)}`]);
+      rows.push(['ANGLE FROM VERTICAL', `${res.touchdown.tiltDeg.toFixed(1)}°`,
+        `LIMIT ${Math.round(res.touchdown.limitAngle)}°`]);
+      rows.push(['LANDING SITE', res.touchdown.pad ? res.touchdown.pad.label : 'OPEN GROUND', '']);
+    }
+    rows.push(['MISSION TIME', fmtTime(res.missionTime), '']);
+    rows.push(['PROPELLANT LEFT', fmtMass(res.fuelLeft), '']);
+    if (good) {
+      if (res.sample) rows.push(['SAMPLE ABOARD', fmtMass(res.sample), '']);
+      rows.push(['LIFE SUPPORT LEFT', fmtTime(res.lifeLeft), '']);
       rows.push(['FUEL BONUS', `${res.fuelBonus} CR`, '']);
       rows.push(['CREDITS EARNED', `${res.credits} CR`, '']);
+    } else {
+      rows.push(['HARDWARE RECOVERED', `${res.refund} CR`, '']);
     }
 
     const w = Math.min(520, r.w - 80);
     const x0 = cx - w / 2;
     for (const [label, value, note] of rows) {
-      r.text(label, x0, y, { size: 13, alpha: 0.55 });
-      r.text(value, x0 + w * 0.72, y, { size: 14, align: 'right' });
+      r.text(label, x0, y, { size: 12, alpha: 0.55 });
+      r.text(value, x0 + w * 0.74, y, { size: 13, align: 'right' });
       if (note) r.text(note, x0 + w, y, { size: 11, align: 'right', alpha: 0.4 });
-      y += 24;
+      y += 21;
     }
 
     y += 18;
-    r.text(`CREDITS  ${this.session.credits}`, cx, y, { size: 15, align: 'center', alpha: 0.8 });
-    y += 34;
-    r.text(res.success ? 'PRESS SPACE FOR THE HANGAR' : 'PRESS SPACE TO TRY AGAIN', cx, y, {
-      size: 14, align: 'center', alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
-    });
+    r.text(`CREDITS  ${this.session.credits}`, cx, y,
+      { size: 15, align: 'center', color: COLORS.accent });
+    y += 32;
+    r.text(good ? 'PRESS ENTER FOR THE HANGAR' : 'PRESS ENTER TO REBUILD AND TRY AGAIN',
+      cx, y, {
+        size: 14, align: 'center',
+        alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
+      });
   }
 
   drawComplete() {
     const r = this.r;
-    this.dim(0.8);
+    this.dim(0.85);
     const cx = r.w / 2;
     let y = r.h / 2 - 90;
-    r.text('CAMPAIGN COMPLETE', cx, y, { size: 32, align: 'center' });
+    r.text('CAMPAIGN COMPLETE', cx, y,
+      { size: 32, align: 'center', color: COLORS.good });
     y += 44;
-    r.text(`${this.session.landings} LANDINGS   ${this.session.crashes} VEHICLES LOST`,
+    r.text(`${this.session.landings} LANDINGS   ${this.session.losses} VEHICLES LOST`,
       cx, y, { size: 15, align: 'center', alpha: 0.75 });
     y += 26;
-    r.text(`${this.session.totalCredits} CREDITS EARNED`, cx, y,
+    r.text(`${this.session.totalEarned} CREDITS EARNED`, cx, y,
       { size: 15, align: 'center', alpha: 0.75 });
     y += 50;
-    r.text('PRESS R TO FLY THE CAMPAIGN AGAIN', cx, y, {
-      size: 14, align: 'center', alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
+    r.text('PRESS R TO FLY IT AGAIN', cx, y, {
+      size: 14, align: 'center',
+      alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
     });
   }
 }

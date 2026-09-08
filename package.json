@@ -1,12 +1,13 @@
 {
   "name": "lander",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "A 2D vector-graphics lunar lander with real physics and a between-level upgrade economy.",
+  "description": "A 2D orbital lander: real two-body physics, multi-stage rocket design, and landings from orbit.",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "serve": "node server.js",
-    "test": "node test/orbittest.mjs && node test/physicstest.mjs"
+    "test": "node test/orbittest.mjs && node test/physicstest.mjs && node test/gametest.mjs",
+    "economy": "node test/economy.mjs"
   }
 }

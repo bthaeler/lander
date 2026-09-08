@@ -184,7 +184,7 @@ export const LEVELS = [
     start: { type: 'drop', pad: 'alpha', altitude: 400, offset: 30, drift: 0 },
     envelope: { speed: 10, angle: 30 },
     objectives: [{ type: 'land', pad: 'alpha' }],
-    estDeltaV: 150, estDuration: 180, reward: 700,
+    estDeltaV: 150, estDuration: 180, reward: 900,
   },
   {
     id: 2, title: 'DESCENT PROFILE', body: 'luna', graphicsTier: 1,
@@ -192,7 +192,7 @@ export const LEVELS = [
     start: { type: 'drop', pad: 'alpha', altitude: 3000, offset: 900, drift: 14 },
     envelope: { speed: 8, angle: 24 },
     objectives: [{ type: 'land', pad: 'alpha' }],
-    estDeltaV: 340, estDuration: 360, reward: 1000,
+    estDeltaV: 340, estDuration: 360, reward: 1300,
   },
   {
     id: 3, title: 'HOP', body: 'luna', graphicsTier: 2,
@@ -200,7 +200,7 @@ export const LEVELS = [
     start: { type: 'surface', pad: 'alpha' },
     envelope: { speed: 8, angle: 24 },
     objectives: [{ type: 'land', pad: 'beta' }],
-    estDeltaV: 320, estDuration: 480, reward: 1400,
+    estDeltaV: 320, estDuration: 480, reward: 1900,
   },
   {
     id: 4, title: 'ABOVE THE LINE', body: 'luna', graphicsTier: 2,
@@ -211,7 +211,7 @@ export const LEVELS = [
       { type: 'altitude', min: 30000 },
       { type: 'land', pad: null },
     ],
-    estDeltaV: 760, estDuration: 900, reward: 1900,
+    estDeltaV: 760, estDuration: 900, reward: 2800,
   },
   {
     id: 5, title: 'ORBITAL INSERTION', body: 'luna', graphicsTier: 2,
@@ -219,7 +219,7 @@ export const LEVELS = [
     start: { type: 'surface', pad: 'alpha' },
     envelope: { speed: 7, angle: 20 },
     objectives: [{ type: 'orbit', minPeriapsis: 20000 }],
-    estDeltaV: 1980, estDuration: 1200, reward: 2800,
+    estDeltaV: 1980, estDuration: 1200, reward: 4500,
   },
   {
     id: 6, title: 'DEORBIT', body: 'luna', graphicsTier: 3,
@@ -227,7 +227,7 @@ export const LEVELS = [
     start: { type: 'orbit', altitude: 60000, pad: 'alpha', leadAngle: 0.9 },
     envelope: { speed: 6, angle: 18 },
     objectives: [{ type: 'land', pad: 'alpha' }],
-    estDeltaV: 1950, estDuration: 2400, reward: 3400,
+    estDeltaV: 1950, estDuration: 2400, reward: 5500,
   },
   {
     id: 7, title: 'ROUND TRIP', body: 'luna', graphicsTier: 3,
@@ -238,7 +238,7 @@ export const LEVELS = [
       { type: 'orbit', minPeriapsis: 20000 },
       { type: 'land', pad: 'beta' },
     ],
-    estDeltaV: 4000, estDuration: 5400, reward: 5200,
+    estDeltaV: 4000, estDuration: 5400, reward: 9000,
   },
   {
     id: 8, title: 'SAMPLE RETURN', body: 'luna', graphicsTier: 3,
@@ -250,7 +250,7 @@ export const LEVELS = [
       { type: 'sample' },
       { type: 'orbit', minPeriapsis: 20000 },
     ],
-    estDeltaV: 4400, estDuration: 10800, reward: 8000,
+    estDeltaV: 4400, estDuration: 10800, reward: 17000,
   },
   {
     id: 9, title: 'THICK AIR', body: 'earth', graphicsTier: 3,
@@ -261,7 +261,7 @@ export const LEVELS = [
       { type: 'altitude', min: 60000 },
       { type: 'land', pad: null },
     ],
-    estDeltaV: 2600, estDuration: 1500, reward: 9000,
+    estDeltaV: 2600, estDuration: 1500, reward: 30000,
   },
   {
     id: 10, title: 'EARTH ORBIT', body: 'earth', graphicsTier: 3,
@@ -269,7 +269,7 @@ export const LEVELS = [
     start: { type: 'surface', pad: 'cape' },
     envelope: { speed: 8, angle: 24 },
     objectives: [{ type: 'orbit', minPeriapsis: 160000 }],
-    estDeltaV: 9400, estDuration: 2700, reward: 16000,
+    estDeltaV: 9400, estDuration: 2700, reward: 45000,
   },
   {
     id: 11, title: 'MARS DESCENT', body: 'mars', graphicsTier: 3,
@@ -277,7 +277,7 @@ export const LEVELS = [
     start: { type: 'orbit', altitude: 80000, pad: 'chryse', leadAngle: 0.8 },
     envelope: { speed: 6, angle: 16 },
     objectives: [{ type: 'land', pad: 'chryse' }],
-    estDeltaV: 3800, estDuration: 3600, reward: 14000,
+    estDeltaV: 3800, estDuration: 3600, reward: 30000,
   },
   {
     id: 12, title: 'MARS SAMPLE RETURN', body: 'mars', graphicsTier: 3,
@@ -289,7 +289,7 @@ export const LEVELS = [
       { type: 'sample' },
       { type: 'orbit', minPeriapsis: 60000 },
     ],
-    estDeltaV: 8200, estDuration: 14400, reward: 26000,
+    estDeltaV: 8200, estDuration: 14400, reward: 70000,
   },
 ];
 
