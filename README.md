@@ -28,6 +28,7 @@ npm run economy    # cheapest viable rocket per level vs. available credits
 | `X` | Stage — jettison the burnt-out stage below you |
 | `T` / `G` | Flight computer: engage hold / cycle hold mode |
 | `,` `.` | Time warp down / up |
+| `P` / `ESC` | Pause. The overlay doubles as the controls reference. |
 | `M` | Map view, framed on your whole orbit |
 | `H` | Cycle HUD layout (TOP BAR / CORNERS / CLUSTER) |
 | `R` | Abort the mission |

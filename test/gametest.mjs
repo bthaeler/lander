@@ -357,6 +357,75 @@ console.log('Earth orbit from the Cape (level 10):');
   ok('atmospheric drag was significant', maxQ > 5000, `${(maxQ / 1000).toFixed(1)} kPa`);
 }
 
+// --- pause -------------------------------------------------------------------
+console.log('pause freezes the simulation:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  input.press('launch');
+  game.update(DT); input.endFrame();
+
+  // Get some motion going first, so a frozen state is distinguishable.
+  input.hold('boost', true);
+  for (let i = 0; i < 120; i++) { game.update(DT); input.endFrame(); }
+  input.hold('boost', false);
+  ok('ship is moving before pause', Math.abs(game.ship.speed) > 1);
+
+  input.press('pause');
+  game.update(DT); input.endFrame();
+  ok('pause engages', game.paused === true);
+
+  const snap = {
+    x: game.ship.x, y: game.ship.y, vx: game.ship.vx, vy: game.ship.vy,
+    angle: game.ship.angle, fuel: game.ship.totalFuel,
+    met: game.missionTime, life: game.lifeRemaining,
+    scale: game.r.scale, camX: game.r.camera.x,
+  };
+
+  // Hold every flight key down for 300 frames; nothing should budge.
+  input.hold('boost', true);
+  input.hold('right', true);
+  for (let i = 0; i < 300; i++) {
+    if (i % 40 === 0) input.press('warpUp');
+    game.update(DT);
+    input.endFrame();
+  }
+  input.clear();
+
+  const same = (a, b) => Math.abs(a - b) < 1e-12;
+  ok('position frozen', same(game.ship.x, snap.x) && same(game.ship.y, snap.y));
+  ok('velocity frozen', same(game.ship.vx, snap.vx) && same(game.ship.vy, snap.vy));
+  ok('attitude frozen', same(game.ship.angle, snap.angle));
+  ok('propellant frozen', same(game.ship.totalFuel, snap.fuel),
+    `${snap.fuel.toFixed(2)} -> ${game.ship.totalFuel.toFixed(2)} kg`);
+  ok('mission clock frozen', same(game.missionTime, snap.met));
+  ok('life support frozen', same(game.lifeRemaining, snap.life));
+  ok('camera frozen', same(game.r.scale, snap.scale) && same(game.r.camera.x, snap.camX));
+  ok('warp keys ignored while paused', game.warpIndex === 0);
+  ok('still flying, not ended', game.state === 'flying');
+
+  // HUD cycling is deliberately still allowed on a frozen frame.
+  const layout = game.hudLayout;
+  input.press('hud');
+  game.update(DT); input.endFrame();
+  ok('HUD can still be cycled while paused', game.hudLayout !== layout);
+
+  input.press('pause');
+  game.update(DT); input.endFrame();
+  ok('pause releases', game.paused === false);
+  for (let i = 0; i < 30; i++) { game.update(DT); input.endFrame(); }
+  ok('simulation resumes', game.missionTime > snap.met && game.ship.y !== snap.y);
+
+  // Abort must remain reachable from the pause screen.
+  input.press('pause');
+  game.update(DT); input.endFrame();
+  input.press('restart');
+  game.update(DT); input.endFrame();
+  ok('abort works from the pause screen',
+    game.state === 'result' && game.result.success === false);
+  ok('and clears the pause flag', game.paused === false);
+}
+
 // --- flight computer ---------------------------------------------------------
 console.log('flight computer:');
 {

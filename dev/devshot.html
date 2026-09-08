@@ -81,6 +81,7 @@ if (screen === 'hangar') {
     game.warpIndex = 5;
   }
   if (screen === 'map') game.mapView = true;
+  if (screen === 'pause') { place(alt, 0.18); game.missionTime = 412; game.paused = true; }
   if (screen === 'result') {
     place(60, 0.05, -1.2, 0.3);
     game.lastTouchdown = {

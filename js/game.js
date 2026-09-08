@@ -39,6 +39,7 @@ export class Game {
     this.throttle = 0;
     this.holdOn = false;
     this.holdIndex = 0;
+    this.paused = false;
     this.message = '';
     this.messageTime = 0;
     this.restart();
@@ -91,6 +92,7 @@ export class Game {
     this.lifeRemaining = 0;
     this.warpIndex = 0;
     this.mapView = false;
+    this.paused = false;
     this.r.setTier(level.graphicsTier);
     this.hangar.reset();
   }
@@ -115,6 +117,7 @@ export class Game {
     this.throttle = 0;
     this.holdOn = false;
     this.holdIndex = 0;
+    this.paused = false;
     this.lifeRemaining = stats.lifeSeconds;
     this.lifeTotal = stats.lifeSeconds;
     this.startFuel = this.ship.totalFuel;
@@ -171,7 +174,27 @@ export class Game {
   // --- main loop -------------------------------------------------------------
 
   update(dt) {
+    // this.time keeps running while paused so on-screen prompts still pulse;
+    // nothing that affects the simulation does.
     this.time += dt;
+
+    if (this.input.wasPressed('pause') && this.state === STATE.FLYING) {
+      this.paused = !this.paused;
+    }
+
+    if (this.paused && this.state === STATE.FLYING) {
+      // Frozen. Cycling the HUD is allowed -- comparing layouts on a still
+      // frame is the easiest way to judge them -- and so is aborting.
+      if (this.input.wasPressed('hud')) {
+        this.hudLayout = (this.hudLayout + 1) % HUD_LAYOUTS.length;
+      }
+      if (this.input.wasPressed('restart')) {
+        this.paused = false;
+        this.abort();
+      }
+      return;
+    }
+
     if (this.hudLabelTime > 0) this.hudLabelTime -= dt;
     if (this.titleTime > 0) this.titleTime -= dt;
     if (this.messageTime > 0) this.messageTime -= dt;
@@ -685,7 +708,10 @@ export class Game {
 
     if (this.state === STATE.FLYING) {
       drawHUD(r, telemetry(this), this.hudLayout);
-      this.drawTitleFlash();
+      // The title flash would sit behind the pause overlay forever, since its
+      // timer is frozen along with everything else.
+      if (this.paused) this.drawPaused();
+      else this.drawTitleFlash();
     }
     if (this.state === STATE.RESULT) this.drawResult();
     if (this.state === STATE.COMPLETE) this.drawComplete();
@@ -735,6 +761,47 @@ export class Game {
       r.text('T HOLD    G HOLD MODE   (needs a flight computer)',
         r.w / 2, r.h * 0.36 + 132, { size: 12, align: 'center', alpha: a * 0.5 });
     }
+  }
+
+  /** Pause overlay, which doubles as the controls reference. */
+  drawPaused() {
+    const r = this.r;
+    this.dim(0.72);
+    const cx = r.w / 2;
+    let y = r.h / 2 - 190;
+
+    r.text('PAUSED', cx, y, { size: 32, align: 'center', color: COLORS.accent });
+    y += 22;
+    r.text(`${this.level.title}  /  ${this.body.name}   MET ${fmtTime(this.missionTime)}`,
+      cx, y, { size: 12, align: 'center', alpha: 0.55 });
+    y += 40;
+
+    const rows = [
+      ['ROTATE', 'LEFT / RIGHT   (A / D)'],
+      ['THROTTLE', 'W / S   (UP / DOWN)'],
+      ['FULL THRUST', 'SPACE  (hold)'],
+      ['ENGINE CUTOFF', 'F'],
+      ['STAGE', 'X'],
+      ['TIME WARP', ',  /  .'],
+      ['FLIGHT COMPUTER', 'T engage    G mode'],
+      ['MAP VIEW', 'M'],
+      ['HUD LAYOUT', 'H'],
+      ['PAUSE', 'P  /  ESC'],
+      ['ABORT MISSION', 'R'],
+    ];
+    const w = Math.min(420, r.w - 80);
+    const x0 = cx - w / 2;
+    for (const [label, keys] of rows) {
+      r.text(label, x0, y, { size: 12, alpha: 0.5 });
+      r.text(keys, x0 + w, y, { size: 12, align: 'right' });
+      y += 20;
+    }
+
+    y += 16;
+    r.text('PRESS P TO RESUME', cx, y, {
+      size: 14, align: 'center',
+      alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
+    });
   }
 
   drawResult() {

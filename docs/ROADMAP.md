@@ -102,6 +102,16 @@ money decision like everything else.
 - [x] Verified: with FC-3 installed and descent assist engaged, level 1 lands
       itself at 1.00 m/s dead vertical on Pad Alpha with no other input
 
+## Quality of life `[~]`
+
+- [x] **Pause** (`P` / `ESC`). Freezes the simulation completely — position,
+      velocity, propellant, mission clock, life support, warp and camera.
+      Cycling the HUD and aborting stay live, since comparing layouts on a
+      still frame is the easiest way to judge them. The overlay doubles as the
+      controls reference, which matters now that there are fifteen keys.
+- [ ] Save/resume a campaign between sessions
+- [ ] Rebindable keys
+
 ## Phase 7 — Interplanetary `[ ]` (the capstone, not started)
 
 - [ ] Multi-body: Moon orbiting Earth, n-body acceleration summation
