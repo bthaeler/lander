@@ -11,9 +11,14 @@ export const TANK_DRY_FRACTION = 0.085;
 // Fixed plumbing/interstage mass per stage.
 export const STAGE_STRUCTURE = 60;
 
-// Engine gimbal: steering torque = thrust * gimbalFraction * (length/2).
+// Engine gimbal: steering torque = thrust * gimbalFraction * length * this.
 // RCS alone cannot turn a large launcher; gimbal is what makes it steerable.
-export const GIMBAL_LENGTH_FACTOR = 0.5;
+//
+// This is well below the L/2 a full-deflection nozzle would give. A real
+// gimbal is that authoritative, but real vehicles do not hand full deflection
+// to the pilot -- the control system rations it. Manual input commanding full
+// deflection made a small lander snap round in about a second.
+export const GIMBAL_LENGTH_FACTOR = 0.2;
 
 export const WARP_LEVELS = [1, 2, 5, 10, 25, 100, 1000, 10000, 100000];
 export const WARP_MAX_POWERED = 2;      // index into WARP_LEVELS while thrusting
@@ -131,11 +136,19 @@ export const CAPSULE = { name: 'C-1 POD', mass: 420, cost: 0 };
 
 export const LIFE_SUPPORT = { name: 'LS CANISTER', mass: 22, hours: 2, cost: 90 };
 
+// Torques are tuned so the starting lander turns at about 0.5 rad/s^2, which
+// is the figure the pre-orbital build settled on and felt controllable.
+// Inertia grows with mass AND the square of size, while RCS torque does not
+// grow at all, so each tier suits a vehicle roughly 3x heavier than the last.
+// The ladder is spaced to give about 0.5 rad/s^2 -- the figure the pre-orbital
+// build settled on -- to successively larger landers. Fitting a big RCS to a
+// tiny lander really does make it twitchy; the hangar shows the turn rate so
+// that is a visible choice rather than a surprise.
 export const RCS_TIERS = [
-  { name: 'R-1 NUDGE', mass: 22, torque: 2.5e3, cost: 200 },
-  { name: 'R-2 SWIVEL', mass: 40, torque: 6e3, cost: 700 },
-  { name: 'R-3 PIVOT', mass: 75, torque: 1.8e4, cost: 2000 },
-  { name: 'R-4 GYRO', mass: 140, torque: 6e4, cost: 5200 },
+  { name: 'R-1 NUDGE', mass: 22, torque: 1.3e3, cost: 200 },
+  { name: 'R-2 SWIVEL', mass: 40, torque: 4.5e3, cost: 700 },
+  { name: 'R-3 PIVOT', mass: 75, torque: 1.5e4, cost: 2000 },
+  { name: 'R-4 GYRO', mass: 140, torque: 5e4, cost: 5200 },
 ];
 
 // Flight computer. The original brief called these "automated flight systems":

@@ -3,7 +3,7 @@ const ROOT = new URL('../js/', import.meta.url).href;
 const { Game } = await import(ROOT + 'game.js');
 const { LEVELS, WARP_LEVELS } = await import(ROOT + 'config.js');
 const { elementsFromState, timeToApoapsis } = await import(ROOT + 'orbit.js');
-const { designStats, salvageValue } = await import(ROOT + 'design.js');
+const { designStats, salvageValue, inertiaFor } = await import(ROOT + 'design.js');
 const { wrapAngle, clamp, DEG } = await import(ROOT + 'util.js');
 
 let failures = 0;
@@ -587,6 +587,79 @@ console.log('expendable stages are not recovered:');
   const before = salvageValue(game.ship);
   game.ship.stages[game.ship.activeStage].fuel *= 0.5;
   ok('burnt propellant is not recovered', salvageValue(game.ship) < before);
+}
+
+// --- rotation authority ------------------------------------------------------
+// This regressed once: moving from the flat-world inertia model to a thin-rod
+// one made the starting lander roughly 3x twitchier than the tuning that felt
+// right, and gimbal on top took it to a 1.1 s 90-degree swing. Pin it.
+console.log('rotation authority stays in the controllable band:');
+{
+  const TARGET = 0.5;   // rad/s^2, the figure the pre-orbital build settled on
+  const swing90 = (a) => 2 * Math.sqrt((Math.PI / 4) / a);
+
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.launch();     // stock level 1 lander, RCS tier 0
+  const ship = game.ship;
+
+  const alphaRcs = ship.rcsTorque / ship.inertia;
+  console.log(`       stock lander: I = ${ship.inertia.toExponential(2)} kg m^2, ` +
+    `a = ${alphaRcs.toFixed(3)} rad/s^2, 90° swing ${swing90(alphaRcs).toFixed(1)} s`);
+  ok('starting lander turns near the target rate',
+    alphaRcs > TARGET * 0.7 && alphaRcs < TARGET * 1.4, `${alphaRcs.toFixed(3)}`);
+  ok('and a 90° swing takes a couple of seconds, not one',
+    swing90(alphaRcs) > 2 && swing90(alphaRcs) < 3.2,
+    `${swing90(alphaRcs).toFixed(1)} s`);
+
+  // Inertia must use the full width, not just length: a thin-rod model badly
+  // under-estimates a short wide lander and is what made it twitchy.
+  const thinRod = (ship.mass * ship.length * ship.length) / 12;
+  ok('inertia accounts for vehicle width', ship.inertia > thinRod * 1.3,
+    `${ship.inertia.toFixed(0)} vs thin-rod ${thinRod.toFixed(0)}`);
+
+  // Gimbal must not dominate: burning should sharpen the response, not
+  // transform it.
+  for (let i = 0; i < 60; i++) {
+    game.throttle = 1;
+    game.update(DT); input.endFrame();
+  }
+  const gimbal = ship.currentThrust * ship.stage.engine.gimbal
+    * ship.length * 0.2;
+  const alphaBurn = (ship.rcsTorque + gimbal) / ship.inertia;
+  console.log(`       under full thrust: a = ${alphaBurn.toFixed(3)} rad/s^2, ` +
+    `90° swing ${swing90(alphaBurn).toFixed(1)} s`);
+  ok('gimbal sharpens but does not dominate', alphaBurn < alphaRcs * 2.2,
+    `${alphaRcs.toFixed(3)} -> ${alphaBurn.toFixed(3)}`);
+
+  // The hangar's predicted turn rate has to match what the ship really does,
+  // or the readout is worse than useless.
+  const stats = designStats(game.session.design, game.body);
+  ok('hangar prediction matches the flown vehicle',
+    Math.abs(stats.turnWet - ship.rcsTorque / stats.inertiaWet) < 1e-9
+    && Math.abs(stats.inertiaWet - inertiaFor(stats.wetMass, stats.length, stats.maxRadius)) < 1e-9);
+
+  // Every vehicle class should have some tier that lands near the target.
+  const { RCS_TIERS } = await import(ROOT + 'config.js');
+  const classes = [
+    ['small lander', { rcs: 0, legs: 0, computer: 0, lifeSupport: 1,
+      stages: [{ engineId: 'lm1', engineCount: 1, fuel: 400 }] }],
+    ['orbital lander', { rcs: 0, legs: 1, computer: 0, lifeSupport: 3,
+      stages: [{ engineId: 've1', engineCount: 1, fuel: 6000 }] }],
+    ['two-stage', { rcs: 0, legs: 2, computer: 1, lifeSupport: 4,
+      stages: [{ engineId: 've1', engineCount: 1, fuel: 9000 },
+        { engineId: 'lm2', engineCount: 1, fuel: 2000 }] }],
+  ];
+  for (const [label, design] of classes) {
+    const st = designStats(design, game.body);
+    const best = RCS_TIERS.reduce((acc, t) => {
+      const a = t.torque / st.inertiaWet;
+      return Math.abs(a - TARGET) < Math.abs(acc.a - TARGET) ? { t, a } : acc;
+    }, { t: null, a: 0 });
+    ok(`${label} has a tier near the target`,
+      best.a > TARGET * 0.7 && best.a < TARGET * 1.4,
+      `${best.t.name} -> ${best.a.toFixed(3)}`);
+  }
 }
 
 // --- pause -------------------------------------------------------------------

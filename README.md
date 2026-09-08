@@ -66,9 +66,18 @@ terrain.
 - **Propellant flow** is `ṁ = F/v_e`, so the ship gets lighter and livelier as
   it burns. Exhaust velocity blends between sea-level and vacuum figures with
   ambient pressure.
-- **Rotation** is torque over inertia for a rod of the stack's length, with no
-  artificial damping. Steering comes from RCS *and* engine gimbal — a 565 t
-  launcher cannot be turned by thrusters alone.
+- **Rotation** is torque over inertia, with no artificial damping — you stop
+  every rotation you start. Inertia uses the cylinder form `m(L² + W²)/12`
+  rather than a thin rod, because splayed gear and tankage put real mass
+  off-axis on a short lander. Steering comes from RCS *and* engine gimbal; a
+  565 t launcher cannot be turned by thrusters alone.
+
+  Inertia grows with mass *and* the square of size while RCS torque does not
+  grow at all, so each attitude tier suits a vehicle roughly three times
+  heavier than the last, and the right tier gives any lander about
+  0.5 rad/s² — a 90° swing in ~2.5 s. The hangar shows the turn rate and swing
+  time for what you have built, and warns when a vehicle is too twitchy or too
+  slow to point.
 - **Atmosphere** is exponential, with drag `½ρv²C_dA`. It matters: a
   three-stage Earth ascent peaks at ~31 kPa of dynamic pressure, and getting
   the trajectory wrong puts you at Mach 16 in the stratosphere pulling 90 g.

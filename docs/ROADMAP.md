@@ -135,6 +135,32 @@ money decision like everything else.
       rules: +158/run on level 1, +8,703 on level 9, and -31,892 on Earth orbit
       where you discard a 50-tonne launcher each attempt.
 
+## Rotation feel `[x]`
+
+Reported as "too sensitive" after actually flying it, and it was a regression:
+replacing the flat-world inertia model (`m * 5.0`) with a thin rod
+(`m * L²/12`) cut a 4 m lander's inertia by 3.2x, and full-deflection gimbal
+piled on top. The starting lander was at 2.65 rad/s² under thrust — a 1.1 s
+90° swing, against the 0.53 rad/s² / 2.4 s the flat-world build had settled on.
+
+- [x] Inertia uses the cylinder form `m(L² + W²)/12`. Adds ~55% to a 4 m
+      lander and ~1% to a 52 m launcher, so the correction lands exactly where
+      the error was.
+- [x] `GIMBAL_LENGTH_FACTOR` 0.5 -> 0.2. A real gimbal is that authoritative,
+      but real vehicles ration deflection rather than handing the pilot all of
+      it.
+- [x] RCS ladder respaced so each tier suits a vehicle ~3x heavier, giving
+      ~0.5 rad/s² to small, orbital and two-stage landers respectively.
+- [x] Hangar shows turn rate and 90° swing time, and warns when a build is
+      twitchy or sluggish — fitting a big RCS to a small lander genuinely does
+      make it twitchy, so that should be visible before launch, not after.
+- [x] Regression test pins the starting lander's rate, the width term in
+      inertia, gimbal not dominating, hangar prediction matching flight, and a
+      suitable tier existing for each vehicle class.
+
+Stock lander is now 0.49 rad/s² coasting and 0.80 under thrust (2.5 s / 2.0 s
+per 90°). Earth ascent and the hands-off descent assist are unaffected.
+
 ## Quality of life `[~]`
 
 - [x] **Pause** (`P` / `ESC`). Freezes the simulation completely — position,

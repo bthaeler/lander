@@ -366,6 +366,24 @@ export class Hangar {
     const lifeOk = stats.lifeSeconds >= level.estDuration;
     row('LIFE SUPPORT', fmtTime(stats.lifeSeconds), lifeOk ? COLORS.ui : COLORS.danger);
 
+    // Turn rate makes the attitude choice legible: too little and you cannot
+    // point the ship, too much and a tap sends it spinning.
+    const twitchy = stats.turnWet > 1.2;
+    const sluggish = stats.turnWet < 0.12;
+    row('TURN RATE', `${stats.turnWet.toFixed(3)} RAD/S²`,
+      twitchy || sluggish ? COLORS.warn : COLORS.ui);
+    row('  90° SWING', isFinite(stats.swing90) ? `${stats.swing90.toFixed(1)} S` : '---',
+      twitchy || sluggish ? COLORS.warn : COLORS.ui, 0.75);
+    if (twitchy) {
+      r.text('! OVER-THRUSTED FOR ITS SIZE — WILL BE TWITCHY', x, yy,
+        { size: 10, color: COLORS.warn });
+      yy += 15;
+    } else if (sluggish) {
+      r.text('! SLOW TO POINT — CONSIDER MORE ATTITUDE AUTHORITY', x, yy,
+        { size: 10, color: COLORS.warn });
+      yy += 15;
+    }
+
     yy += 10;
     r.lineS(x, yy - 12, x + w, yy - 12, COLORS.ui, 0.18);
     const afford = stats.cost <= session.credits;

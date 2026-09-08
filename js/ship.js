@@ -7,7 +7,7 @@
 
 import { GIMBAL_LENGTH_FACTOR, TANK_DRY_FRACTION, STAGE_STRUCTURE } from './config.js';
 import { engineById } from './config.js';
-import { stageGeometry } from './design.js';
+import { stageGeometry, footSpanFor, inertiaFor } from './design.js';
 import { clamp, wrapAngle, rotate } from './util.js';
 
 const CAPSULE_LENGTH = 2.6;
@@ -93,6 +93,19 @@ export class Ship {
   /** Tilt from local vertical, radians. Positive = nose clockwise (right). */
   get tilt() { return wrapAngle(this.upAngle - this.angle); }
 
+  /**
+   * Rotational inertia about the pitch axis.
+   *
+   * A thin-rod model (m * L^2 / 12) badly under-estimates a short, wide
+   * lander: splayed gear, footpads and tankage put a lot of mass off-axis.
+   * Using the full width as well -- the cylinder form -- adds ~55% inertia to
+   * a 4 m lander and almost nothing to a 52 m launcher, which is exactly the
+   * right place for the correction to land.
+   */
+  get inertia() {
+    return inertiaFor(this.mass, this.length, this.maxRadius);
+  }
+
   /** Rebuild the local silhouette after staging. */
   rebuildGeometry() {
     const stages = this.remainingStages;
@@ -119,7 +132,7 @@ export class Ship {
     }
 
     // Legs and footpads live at the base of whatever is still attached.
-    this.footSpan = Math.max(1.6, maxRadius * 1.5);
+    this.footSpan = footSpanFor(maxRadius);
     this.legRoot = bottom + Math.min(2.2, length * 0.18);
     this.nozzle = bottom;
   }
@@ -212,7 +225,7 @@ export class Ship {
 
     // --- attitude. Torque comes from RCS plus engine gimbal; a large stack
     // cannot be turned by RCS alone.
-    const inertia = mass * (this.length * this.length) / 12;
+    const inertia = this.inertia;
     const gimbalTorque = thrust * (stage ? stage.engine.gimbal : 0)
       * this.length * GIMBAL_LENGTH_FACTOR;
     const torque = (this.rcsTorque + gimbalTorque) * clamp(cmd.rotate, -1, 1);

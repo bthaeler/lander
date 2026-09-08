@@ -38,6 +38,20 @@ export function stageGeometry(stage) {
   return { radius, length };
 }
 
+/** Landing-gear footprint, which also sets how wide the vehicle is. */
+export function footSpanFor(maxRadius) {
+  return Math.max(1.6, maxRadius * 1.5);
+}
+
+/**
+ * Pitch inertia for a cylinder of this length and width. Shared with Ship so
+ * the hangar's predicted turn rate is the rate you actually get in flight.
+ */
+export function inertiaFor(mass, length, maxRadius) {
+  const width = 2 * footSpanFor(maxRadius);
+  return (mass * (length * length + width * width)) / 12;
+}
+
 export function stageStats(stage) {
   const engine = engineById(stage.engineId);
   const engineMass = engine.mass * stage.engineCount;
@@ -113,6 +127,14 @@ export function designStats(design, body = null) {
 
   const liftoffThrust = stages.length ? stages[0].thrust : 0;
   const g = body ? body.surfaceGravity() : 0;
+  const dry = totalWet - stages.reduce((a, s) => a + s.fuel, 0);
+
+  // Turn rate, so the RCS choice is an informed one. Gimbal adds to this in
+  // flight but only while the engine is lit.
+  const inertiaWet = inertiaFor(totalWet, length, maxRadius);
+  const inertiaDry = inertiaFor(dry, length, maxRadius);
+  const turnWet = payload.rcs.torque / inertiaWet;
+  const turnDry = payload.rcs.torque / inertiaDry;
 
   return {
     payload,
@@ -121,7 +143,12 @@ export function designStats(design, body = null) {
     maxRadius,
     dragArea: Math.PI * maxRadius * maxRadius,
     wetMass: totalWet,
-    dryMass: totalWet - stages.reduce((a, s) => a + s.fuel, 0),
+    dryMass: dry,
+    inertiaWet,
+    turnWet,
+    turnDry,
+    // Time to swing 90 degrees and stop again at full deflection.
+    swing90: turnWet > 0 ? 2 * Math.sqrt((Math.PI / 4) / turnWet) : Infinity,
     deltaV: totalDeltaV,
     liftoffThrust,
     liftoffTWR: g > 0 ? liftoffThrust / (totalWet * g) : Infinity,
