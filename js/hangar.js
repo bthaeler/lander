@@ -4,10 +4,12 @@
 
 import {
   COLORS, LIFE_SUPPORT, RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, CAPSULE, TANK,
-  tankStep, engineById, LEVELS, REPLAY_DECAY, REPLAY_FLOOR,
+  tankStep, engineById, LEVELS, REPLAY_DECAY,
+  difficultyAt, touchdownEnvelope, bonusesFor, maxPayout,
 } from './config.js';
 import {
   designStats, availableEngines, addStage, removeStage, adjustFuel, cycleEngine,
+  suggestDesign,
 } from './design.js';
 import { clamp, fmtDistance, fmtSpeed, fmtMass, fmtTime } from './util.js';
 
@@ -30,6 +32,23 @@ export class Hangar {
     this.selection = 0;
     this.message = '';
     this.messageTime = 0;
+    // The suggested build is a search, so it is computed once per level and
+    // held until the level or the unlocked catalogue changes.
+    this.suggestion = null;
+    this.suggestionKey = '';
+  }
+
+  /**
+   * The vehicle the hangar would build for this mission. Only ever shown at
+   * the setting that offers hints, but computed the same way regardless.
+   */
+  suggestionFor(level, body, frontier) {
+    const key = `${level.id}:${frontier}`;
+    if (this.suggestionKey !== key) {
+      this.suggestionKey = key;
+      this.suggestion = suggestDesign(level, body, frontier);
+    }
+    return this.suggestion;
   }
 
   flash(msg, seconds = 2.6) {
@@ -105,8 +124,30 @@ export class Hangar {
       } else this.flash('THE VEHICLE NEEDS AT LEAST ONE STAGE');
     }
 
+    if (input.wasPressed('suggest')) this.fitSuggestion(session, body, level);
+
     if (input.wasPressed('launch') || input.wasPressed('confirm')) return 'launch';
     return null;
+  }
+
+  /**
+   * Replace the design with the hangar's suggestion. Offered only where hints
+   * are, and it copies the design rather than sharing it so the player can
+   * take it apart afterwards -- which is the point of offering it.
+   */
+  fitSuggestion(session, body, level) {
+    if (difficultyAt(session.difficulty).hints !== 'full') {
+      this.flash('NO BUILD SUGGESTIONS AT THIS DIFFICULTY');
+      return;
+    }
+    const s = this.suggestionFor(level, body, session.frontier);
+    if (!s) { this.flash('NO SUGGESTION FOR THIS MISSION'); return; }
+    session.design = {
+      ...s.design,
+      stages: s.design.stages.map((st) => ({ ...st })),
+    };
+    this.selection = 0;
+    this.flash(`FITTED THE SUGGESTED BUILD — ${s.stats.cost} CR`);
   }
 
   adjust(row, dir, coarse, session, level) {
@@ -155,8 +196,11 @@ export class Hangar {
     const xB = m + colA + gap;
     const xC = xB + colB + gap;
 
+    const diff = difficultyAt(session.difficulty);
     let y = m + 6;
     r.text('HANGAR', xA, y, { size: 25 });
+    r.text(diff.name, xA + r.measure('HANGAR', 25) + 14, y,
+      { size: 11, alpha: 0.45 });
     r.text(`CREDITS  ${session.credits}`, r.w - m, y,
       { size: 19, align: 'right', color: COLORS.accent });
     y += 11;
@@ -173,8 +217,9 @@ export class Hangar {
     if (this.messageTime > 0) {
       r.text(this.message, m, fy - 9, { size: 13, color: COLORS.accent });
     } else {
-      r.text('W/S SELECT   A/D ADJUST (HOLD FOR COARSE)   N ADD STAGE   X REMOVE   Q/E LEVEL',
-        m, fy - 9, { size: 12, alpha: 0.5 });
+      const keys = 'W/S SELECT   A/D ADJUST (HOLD FOR COARSE)   N ADD STAGE   X REMOVE   Q/E LEVEL'
+        + (diff.hints === 'full' ? '   B SUGGESTED BUILD' : '');
+      r.text(keys, m, fy - 9, { size: 12, alpha: 0.5 });
     }
     const afford = stats.cost <= session.credits;
     r.text(afford ? 'ENTER  LAUNCH >' : 'CANNOT AFFORD', r.w - m, fy - 9, {
@@ -184,8 +229,9 @@ export class Hangar {
 
   /** What the mission demands. This is what you design against. */
   drawMission(r, x, y, w, body, level, session) {
+    const diff = difficultyAt(session.difficulty);
     const done = session.completions ? (session.completions[session.levelIndex] || 0) : 0;
-    const payout = Math.max(REPLAY_FLOOR, REPLAY_DECAY ** done);
+    const payout = Math.max(diff.replayFloor, REPLAY_DECAY ** done);
     const canBrowse = session.frontier > 0;
 
     r.text('MISSION', x, y, { size: 11, alpha: 0.55 });
@@ -227,18 +273,32 @@ export class Hangar {
     }
     yy += 10;
 
+    const env = touchdownEnvelope(level, LEG_TIERS[session.design.legs], diff);
     const rows = [
       ['DELTA-V NEEDED', `~${level.estDeltaV} M/S`],
       ['MISSION DURATION', `~${fmtTime(level.estDuration)}`],
-      ['MISSION PAYS UP TO', `${Math.round(level.reward * 1.25 * payout)} CR`],
+      ['MISSION PAYS UP TO', `${Math.round(maxPayout(level, body, diff) * payout)} CR`],
       ['TOUCHDOWN LIMIT',
-        `${(level.envelope.speed + LEG_TIERS[session.design.legs].speedBonus).toFixed(1)} M/S / ` +
-        `${Math.round(level.envelope.angle + LEG_TIERS[session.design.legs].angleBonus)}°`],
+        `${env.speed.toFixed(1)} M/S / ${Math.round(env.angle)}°`],
     ];
     for (const [label, value] of rows) {
       r.text(label, x, yy, { size: 11, alpha: 0.5 });
       r.text(value, x + w, yy, { size: 12, align: 'right', color: COLORS.warn });
       yy += 17;
+    }
+
+    // Bonuses are shown at every setting, and before the flight rather than
+    // after it: they are a plan, not a surprise on the results screen.
+    yy += 8;
+    r.text('BONUSES', x, yy, { size: 11, alpha: 0.55 });
+    yy += 17;
+    for (const b of bonusesFor(level, body)) {
+      r.text(b.label, x, yy, { size: 11, alpha: 0.7, color: COLORS.good });
+      r.text(`+${Math.round(b.value * payout)} CR`, x + w, yy,
+        { size: 11, align: 'right', alpha: 0.7, color: COLORS.good });
+      yy += 14;
+      r.text(b.note, x + 10, yy, { size: 10, alpha: 0.4 });
+      yy += 16;
     }
     return yy;
   }
@@ -331,6 +391,7 @@ export class Hangar {
   }
 
   drawVehicle(r, x, y, w, stats, body, level, session) {
+    const hints = difficultyAt(session.difficulty).hints;
     r.text('FLIGHT MODEL', x, y, { size: 11, alpha: 0.55 });
     let yy = y + 22;
     const row = (label, value, color, alpha = 1) => {
@@ -374,14 +435,18 @@ export class Hangar {
       twitchy || sluggish ? COLORS.warn : COLORS.ui);
     row('  90° SWING', isFinite(stats.swing90) ? `${stats.swing90.toFixed(1)} S` : '---',
       twitchy || sluggish ? COLORS.warn : COLORS.ui, 0.75);
-    if (twitchy) {
-      r.text('! OVER-THRUSTED FOR ITS SIZE — WILL BE TWITCHY', x, yy,
-        { size: 10, color: COLORS.warn });
-      yy += 15;
-    } else if (sluggish) {
-      r.text('! SLOW TO POINT — CONSIDER MORE ATTITUDE AUTHORITY', x, yy,
-        { size: 10, color: COLORS.warn });
-      yy += 15;
+    // The numbers above are arithmetic and stay at every setting. Reading them
+    // for you is the hint, so that is what FLIGHT DIRECTOR loses.
+    if (hints !== 'minimal') {
+      if (twitchy) {
+        r.text('! OVER-THRUSTED FOR ITS SIZE — WILL BE TWITCHY', x, yy,
+          { size: 10, color: COLORS.warn });
+        yy += 15;
+      } else if (sluggish) {
+        r.text('! SLOW TO POINT — CONSIDER MORE ATTITUDE AUTHORITY', x, yy,
+          { size: 10, color: COLORS.warn });
+        yy += 15;
+      }
     }
 
     yy += 10;
@@ -392,23 +457,63 @@ export class Hangar {
       afford ? COLORS.ui : COLORS.danger, 0.7);
 
     // Readiness: the four things that actually decide whether this flies.
-    yy += 14;
-    r.text('READINESS', x, yy, { size: 11, alpha: 0.55 });
-    yy += 18;
-    const checks = [
-      [dvOk, `DELTA-V ${dvOk ? 'SUFFICIENT' : `SHORT BY ${(level.estDeltaV - stats.deltaV).toFixed(0)} M/S`}`],
-      [twrOk, needsLiftoff
-        ? (twrOk ? 'CAN LIFT OFF' : 'TOO HEAVY TO LIFT OFF')
-        : 'NO LIFTOFF REQUIRED'],
-      [lifeOk, lifeOk ? 'LIFE SUPPORT ADEQUATE' : 'LIFE SUPPORT TOO SHORT'],
-      [afford, afford ? 'WITHIN BUDGET' : 'OVER BUDGET'],
-    ];
-    for (const [ok, text] of checks) {
-      r.text(`${ok ? '[x]' : '[!]'} ${text}`, x, yy, {
-        size: 11, color: ok ? COLORS.good : COLORS.danger, alpha: ok ? 0.8 : 1,
-      });
-      yy += 17;
+    // FLIGHT DIRECTOR states the requirements and leaves the verdict to you.
+    if (hints !== 'minimal') {
+      yy += 14;
+      r.text('READINESS', x, yy, { size: 11, alpha: 0.55 });
+      yy += 18;
+      const checks = [
+        [dvOk, `DELTA-V ${dvOk ? 'SUFFICIENT' : `SHORT BY ${(level.estDeltaV - stats.deltaV).toFixed(0)} M/S`}`],
+        [twrOk, needsLiftoff
+          ? (twrOk ? 'CAN LIFT OFF' : 'TOO HEAVY TO LIFT OFF')
+          : 'NO LIFTOFF REQUIRED'],
+        [lifeOk, lifeOk ? 'LIFE SUPPORT ADEQUATE' : 'LIFE SUPPORT TOO SHORT'],
+        [afford, afford ? 'WITHIN BUDGET' : 'OVER BUDGET'],
+      ];
+      for (const [ok, text] of checks) {
+        r.text(`${ok ? '[x]' : '[!]'} ${text}`, x, yy, {
+          size: 11, color: ok ? COLORS.good : COLORS.danger, alpha: ok ? 0.8 : 1,
+        });
+        yy += 17;
+      }
     }
+
+    if (hints === 'full') this.drawSuggestion(r, x, yy + 14, w, body, level, session);
+  }
+
+  /**
+   * CADET's build hint: a vehicle that meets the mission, with the reasoning
+   * for the parts that were chosen for a reason. It is a starting point to
+   * modify, not a shortcut past the design decision -- which is why it shows
+   * what it sized each stage for rather than just handing over a rocket.
+   */
+  drawSuggestion(r, x, y, w, body, level, session) {
+    if (y > r.h - 110) return;   // no room; the readiness block matters more
+    const s = this.suggestionFor(level, body, session.frontier);
+    r.text('SUGGESTED BUILD', x, y, { size: 11, alpha: 0.55 });
+    let yy = y + 18;
+    if (!s) {
+      r.text('NO SUGGESTION FOR THIS MISSION', x, yy, { size: 11, alpha: 0.45 });
+      return;
+    }
+    const n = s.design.stages.length;
+    const dv = Math.round(s.stats.deltaV);
+    r.text(`${n} STAGE${n > 1 ? 'S' : ''}, ${dv} M/S FOR A ${level.estDeltaV} M/S MISSION`,
+      x, yy, { size: 11, alpha: 0.6, color: COLORS.accent });
+    yy += 16;
+    s.design.stages.forEach((st, i) => {
+      const e = engineById(st.engineId);
+      r.text(`S${i + 1}  ${e.name} x${st.engineCount}`, x, yy, { size: 10, alpha: 0.5 });
+      r.text(fmtMass(st.fuel), x + w, yy, { size: 10, align: 'right', alpha: 0.5 });
+      yy += 14;
+    });
+    r.text(`GEAR ${LEG_TIERS[s.design.legs].name}   ${RCS_TIERS[s.design.rcs].name}`,
+      x, yy, { size: 10, alpha: 0.5 });
+    yy += 14;
+    const afford = s.stats.cost <= session.credits;
+    r.text(`B  FIT THIS BUILD — ${s.stats.cost} CR`, x, yy, {
+      size: 11, color: afford ? COLORS.good : COLORS.danger,
+    });
   }
 
   /** Scale silhouette of the stack, bottom stage at the bottom. */

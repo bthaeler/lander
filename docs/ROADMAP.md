@@ -204,7 +204,7 @@ has **exactly zero angular momentum**, which makes its conic degenerate.
 - [ ] Save/resume a campaign between sessions
 - [ ] Rebindable keys
 
-## Phase 9 — Difficulty levels `[ ]`
+## Phase 9 — Difficulty levels `[x]`
 
 Chosen once at launch, before the first hangar. The campaign, the physics and
 the landing rules are identical at every setting — what changes is **how much
@@ -212,50 +212,68 @@ margin the economy gives you**, so the difference is "can you afford a second
 attempt" rather than "is the rocket equation different for you". That keeps a
 single set of tuned levels and one `npm run economy` model.
 
-- [ ] `STATE.DIFFICULTY` — a select screen ahead of `STATE.HANGAR`, shown on
-      first launch and reachable from the hangar only via a new game. Three
-      settings: **CADET / PILOT / FLIGHT DIRECTOR**. `main.js` gets
+- [x] `STATE.DIFFICULTY` — a select screen ahead of `STATE.HANGAR`, shown on
+      first launch and reachable again only by restarting the campaign. Three
+      settings: **CADET / PILOT / FLIGHT DIRECTOR**. `main.js` takes
       `?difficulty=` alongside `?level=`, and `session.difficulty` rides with
-      `session.frontier` and `session.credits`.
-- [ ] `DIFFICULTY` table in `config.js`, read by the same code paths the
-      economy already uses, so no new economic mechanics:
-      `startingCredits` (multiplies `STARTING_CREDITS`), `rewardScale` (on
-      `level.reward`), `salvageScale` (on `SALVAGE_INTACT`/`SALVAGE_WRECKED`),
-      `replayFloor` (overrides `REPLAY_FLOOR`), `envelopeScale` (on
-      `level.envelope.speed` and `.angle`), and `hints`.
-- [ ] On **FLIGHT DIRECTOR**, bonuses are the difference between solvent and
-      stuck: the reward scale is low enough that a clean flight pays for the
-      next build and a crash does not. This is where the objective-bonus system
-      has to exist as its own thing rather than a flat `reward` —
-      **precision landing** (inside pad centre tolerance), **fuel margin**
-      (propellant left as a fraction of the build), **mission time** under the
-      level's `estDuration`, and **hardware returned whole**. Bonuses are
-      listed in the brief so they are a plan, not a surprise on the results
+      `session.frontier` and `session.credits`. A `new Game` still starts
+      playable on PILOT, so nothing that constructs one has to know about the
       screen.
-- [ ] Bonuses exist at every setting — on CADET they are gravy, on FLIGHT
-      DIRECTOR they are the budget. One code path, one set of numbers.
-- [ ] Results screen itemises each bonus earned and each one missed, with the
-      margin by which it was missed. Missing "fuel margin by 40 kg" is the
-      single most useful thing the game can tell a player.
-- [ ] Hangar hint levels driven by `difficulty.hints`:
-      - CADET: a **suggested build** — a recommended stage count, tank size,
-        engine and leg tier derived from `estDeltaV` and the level's landing
-        envelope, offered as "BUILD THIS" one-key fill plus a line explaining
-        *why* each choice ("stage 1 sized for 1980 m/s at 0.85 t/t").
-      - PILOT: the requirements panel and the mass/ΔV budget as today, plus a
-        pass/fail readiness check, no prescription.
+- [x] `DIFFICULTIES` table in `config.js`, read by the same code paths the
+      economy already used, so no new economic mechanics: `credits`
+      (multiplies `STARTING_CREDITS`), `rewardScale` (on `level.reward`),
+      `salvageScale` (on the salvage rates), `replayFloor`, `envelopeScale`,
+      and `hints`. `touchdownEnvelope()` is shared by the hangar and the
+      touchdown judgement, so the printed figure is the enforced one.
+- [x] On **FLIGHT DIRECTOR**, bonuses are the difference between solvent and
+      stuck. The base payment scales with the setting and **the bonuses do
+      not** — that one asymmetry is the whole feature. Level 1 at FLIGHT
+      DIRECTOR nets +739 on a 790-credit rocket for a clean flight; at CADET
+      the same flight nets +1,439.
+- [x] Objective bonuses as their own system: **precision landing**, **fuel
+      margin**, **on schedule**, **intact return**. Which ones a level offers
+      is derived from the mission rather than declared per level, so no level
+      can ship with an unearnable bonus — precision needs a mission ending on
+      a named pad, intact return one a single stage can fly.
+- [x] The fuel margin is measured against the **surviving** stages, not the
+      launch load. Against the whole load it would be unearnable on every
+      staged vehicle, which is exactly where a reserve matters.
+- [x] Results screen itemises each bonus earned and each one missed, with the
+      margin: "13 M TOO FAR OUT", "OVER BY 27:40", "SHORT BY 40 KG".
+- [x] Hangar hint levels driven by `difficulty.hints`:
+      - CADET: a **suggested build** from `suggestDesign()`, with `B` to fit
+        it, and the delta-v it was sized for shown next to the mission's
+        requirement.
+      - PILOT: requirements, mass/ΔV budget and readiness checks, as before.
       - FLIGHT DIRECTOR: requirements only. The mass budget stays — that is
         arithmetic, not a hint — but readiness checks and the twitchy/sluggish
         warnings are off.
-- [ ] `npm run economy` runs the whole seeded campaign at all three settings
-      and reports net income per level for each, so a setting that quietly
-      becomes unwinnable shows up as a negative column rather than a
-      complaint. FLIGHT DIRECTOR is allowed to be near zero on a clean flight;
-      it is not allowed to be negative on a *perfect* one.
+- [x] `npm run economy` walks the seeded campaign at all three settings,
+      flying the cheaper of the suggested build and the search optimum, and
+      reports clean and perfect net income per level. It fails the run if a
+      level is unaffordable or a *perfect* flight loses money.
+
+**The economy model immediately earned its keep.** It failed on level 10:
+Earth orbit paid 45,000 for a mission whose cheapest possible stack costs
+50,260, and the launcher is necessarily expendable, so a perfect flight lost
+money at every setting — the campaign's centrepiece was a level you could not
+afford to fly twice. Its reward is now 65,000. This was a pre-existing bug that
+only became visible once the money was modelled end to end.
+
+**Sizing a suggested build** is a closed form, not a search. With a tank's dry
+mass a fixed fraction *k* of its propellant, a stage carrying mass *A* needs
+`f = (A + E)K / (1 - kK)` where `K = exp(dv/ve) - 1`. The denominator going
+non-positive is not a numerical failure — it is the point where tank structure
+eats the whole mass ratio, which is what forces staging, so the sizer returns
+null there and the caller tries more stages. The delta-v reserve is capped in
+m/s rather than left as a percentage: a 35% margin compounds through the
+rocket equation, and quintupled the Earth launcher before it was capped.
 
 Deliberately **not** varied by difficulty: gravity, drag, engine performance,
 touchdown limits beyond `envelopeScale`, and the levels themselves. A player
-who moves up a setting should recognise the game they already learned.
+who moves up a setting should recognise the game they already learned. The
+game tests assert this directly — same body, same gravity, same level data at
+all three settings, and the same flight earning the same bonuses.
 
 ## Phase 10 — Navigation assistants `[ ]`
 

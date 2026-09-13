@@ -2,10 +2,12 @@ import {
   FIXED_DT, LEVELS, BODIES, COLORS, WARP_LEVELS, WARP_MAX_POWERED,
   WARP_MAX_ATMOSPHERE, WARP_MAX_LOW, LOW_ALTITUDE_FRACTION, WARP_IMPACT_MARGIN,
   RCS_TIERS, LEG_TIERS, COMPUTER_TIERS, HOLD_LABELS, SAMPLE_MASS, STARTING_CREDITS,
-  SALVAGE_INTACT, SALVAGE_WRECKED, SEVERITY_SPEED_SPAN,
-  REPLAY_DECAY, REPLAY_FLOOR,
+  SEVERITY_SPEED_SPAN, REPLAY_DECAY,
   MAX_TOUCHDOWN_SPIN, OFF_PAD_MULTIPLIER, OFF_PAD_TOLERANCE_SCALE,
   MAX_OFF_PAD_SLOPE_DEG,
+  DIFFICULTIES, DEFAULT_DIFFICULTY, difficultyAt,
+  salvageRates, touchdownEnvelope, bonusesFor,
+  PRECISION_FRACTION, FUEL_MARGIN_FRACTION,
 } from './config.js';
 import { Body } from './body.js';
 import { Ship } from './ship.js';
@@ -18,7 +20,10 @@ import {
 import { drawHUD, telemetry, HUD_LAYOUTS } from './hud.js';
 import { clamp, lerp, wrapAngle, DEG, fmtTime, fmtMass } from './util.js';
 
-const STATE = { HANGAR: 'hangar', FLYING: 'flying', RESULT: 'result', COMPLETE: 'complete' };
+const STATE = {
+  DIFFICULTY: 'difficulty', HANGAR: 'hangar', FLYING: 'flying',
+  RESULT: 'result', COMPLETE: 'complete',
+};
 
 // Escaping this far means the mission is unrecoverable.
 const ESCAPE_RADIUS_FACTOR = 60;
@@ -47,9 +52,16 @@ export class Game {
     this.restart();
   }
 
-  restart() {
+  /**
+   * Begin a campaign at a difficulty setting. The constructor starts one at
+   * the default so a Game is always in a playable state; `promptDifficulty`
+   * is what puts the choice in front of a player.
+   */
+  restart(difficultyIndex = DEFAULT_DIFFICULTY) {
+    const difficulty = difficultyAt(difficultyIndex);
     this.session = {
-      credits: STARTING_CREDITS,
+      difficulty: DIFFICULTIES.indexOf(difficulty),
+      credits: Math.round(STARTING_CREDITS * difficulty.credits),
       levelIndex: 0,
       // Highest level unlocked. Part availability keys off this, not off the
       // level currently selected, so replaying level 1 does not take your
@@ -63,9 +75,29 @@ export class Game {
     };
     this.loadLevel(0);
     this.state = STATE.HANGAR;
+    return this;
   }
 
   get level() { return LEVELS[this.session.levelIndex]; }
+
+  get difficulty() { return difficultyAt(this.session.difficulty); }
+
+  /**
+   * Put the difficulty choice in front of the player. Only reachable before a
+   * campaign has been flown -- the setting rewrites the starting budget, so
+   * changing it mid-run would mean either a windfall or a bankruptcy.
+   */
+  promptDifficulty(index = this.session.difficulty) {
+    this.diffIndex = clamp(index, 0, DIFFICULTIES.length - 1);
+    this.state = STATE.DIFFICULTY;
+    return this;
+  }
+
+  /** Take the choice and start the campaign on it. */
+  chooseDifficulty(index) {
+    this.restart(index);
+    return this;
+  }
 
   /**
    * Start straight into a chosen level, for testing. Unlocks everything up to
@@ -77,13 +109,14 @@ export class Game {
    */
   jumpTo(index, credits = null) {
     const i = clamp(Math.round(index), 0, LEVELS.length - 1);
+    const diff = this.difficulty;
     this.session.frontier = i;
     this.session.completions = LEVELS.map((_, n) => (n < i ? 1 : 0));
     if (credits !== null) {
       this.session.credits = Math.max(0, credits);
     } else {
-      let earned = STARTING_CREDITS;
-      for (let n = 0; n < i; n++) earned += LEVELS[n].reward * 1.2;
+      let earned = STARTING_CREDITS * diff.credits;
+      for (let n = 0; n < i; n++) earned += LEVELS[n].reward * 1.2 * diff.rewardScale;
       this.session.credits = Math.round(earned);
     }
     this.loadLevel(i);
@@ -108,18 +141,15 @@ export class Game {
    */
   get payoutMultiplier() {
     const done = this.session.completions[this.session.levelIndex] || 0;
-    return Math.max(REPLAY_FLOOR, REPLAY_DECAY ** done);
+    return Math.max(this.difficulty.replayFloor, REPLAY_DECAY ** done);
   }
 
   get isReplay() { return (this.session.completions[this.session.levelIndex] || 0) > 0; }
 
-  /** Touchdown envelope including landing-gear bonuses. */
+  /** Touchdown envelope, widened by the landing gear and the setting. */
   get envelope() {
-    const legs = LEG_TIERS[this.session.design.legs];
-    return {
-      speed: this.level.envelope.speed + legs.speedBonus,
-      angle: this.level.envelope.angle + legs.angleBonus,
-    };
+    return touchdownEnvelope(this.level, LEG_TIERS[this.session.design.legs],
+      this.difficulty);
   }
 
   loadLevel(index) {
@@ -249,13 +279,17 @@ export class Game {
     }
 
     switch (this.state) {
+      case STATE.DIFFICULTY: this.updateDifficulty(); break;
       case STATE.HANGAR: this.updateHangar(); break;
       case STATE.FLYING: this.updateFlying(dt); break;
       case STATE.RESULT: this.updateResult(dt); break;
       case STATE.COMPLETE:
         // ENTER goes back to the hangar rather than forcing a restart, so the
-        // campaign being finished does not end the save.
-        if (this.input.wasPressed('restart')) this.restart();
+        // campaign being finished does not end the save. R starts over, and a
+        // new campaign is the one moment the difficulty can change.
+        if (this.input.wasPressed('restart')) {
+          this.restart(this.session.difficulty).promptDifficulty();
+        }
         else if (this.input.wasPressed('confirm')) {
           this.loadLevel(this.session.frontier);
           this.state = STATE.HANGAR;
@@ -263,6 +297,18 @@ export class Game {
         break;
     }
     this.updateCamera(dt);
+  }
+
+  updateDifficulty() {
+    if (this.input.wasPressed('up')) {
+      this.diffIndex = (this.diffIndex - 1 + DIFFICULTIES.length) % DIFFICULTIES.length;
+    }
+    if (this.input.wasPressed('down')) {
+      this.diffIndex = (this.diffIndex + 1) % DIFFICULTIES.length;
+    }
+    if (this.input.wasPressed('confirm') || this.input.wasPressed('launch')) {
+      this.chooseDifficulty(this.diffIndex);
+    }
   }
 
   updateHangar() {
@@ -573,7 +619,10 @@ export class Game {
     else if (Math.abs(ship.omega) > MAX_TOUCHDOWN_SPIN) reason = 'STILL ROTATING — TIPPED OVER';
     else if (!pad && slope > MAX_OFF_PAD_SLOPE_DEG) reason = 'GROUND TOO STEEP';
 
-    this.lastTouchdown = { speed, tiltDeg, pad, limitSpeed, limitAngle, slope };
+    // Distance from the pad's centre line, which is what the precision bonus
+    // is judged on. Measured at the pad's own radius, not the body's mean.
+    const offset = pad ? Math.abs(wrapAngle(midTheta - pad.theta)) * pad.r : Infinity;
+    this.lastTouchdown = { speed, tiltDeg, pad, limitSpeed, limitAngle, slope, offset };
 
     if (reason) {
       this.fail(reason, { speed, tiltDeg, limitSpeed, limitAngle });
@@ -588,10 +637,58 @@ export class Game {
 
   // --- outcomes --------------------------------------------------------------
 
+  /**
+   * Grade the flight against each bonus the level offers. Every one is
+   * all-or-nothing against a threshold stated in the hangar, and a missed one
+   * carries the margin it was missed by -- "short by 40 kg" is the single most
+   * useful thing the results screen can say.
+   */
+  awardBonuses() {
+    const ship = this.ship;
+    const level = this.level;
+    const td = this.lastTouchdown;
+    // What the stages still bolted on were built to hold. Jettisoned stages
+    // do not count against the reserve -- burning one dry and dropping it is
+    // the plan, not a waste.
+    const loaded = Math.max(1, ship.design.stages
+      .slice(ship.activeStage).reduce((a, s) => a + s.fuel, 0));
+
+    return bonusesFor(level, this.body).map((b) => {
+      let earned = false;
+      let detail = '';
+      if (b.id === 'precision') {
+        const offset = td && isFinite(td.offset) ? td.offset : Infinity;
+        const limit = (td && td.pad ? td.pad.width / 2 : 0) * PRECISION_FRACTION;
+        if (!td || !td.pad) detail = 'NOT ON THE PAD';
+        else if (!isFinite(offset)) detail = 'NOT MEASURED';
+        else {
+          earned = offset <= limit;
+          detail = earned ? `${offset.toFixed(0)} M OFF CENTRE`
+            : `${(offset - limit).toFixed(0)} M TOO FAR OUT`;
+        }
+      } else if (b.id === 'fuel') {
+        const need = loaded * FUEL_MARGIN_FRACTION;
+        earned = ship.totalFuel >= need;
+        detail = earned ? `${fmtMass(ship.totalFuel)} LEFT`
+          : `SHORT BY ${fmtMass(need - ship.totalFuel)}`;
+      } else if (b.id === 'schedule') {
+        earned = this.missionTime <= level.estDuration;
+        detail = earned ? `${fmtTime(level.estDuration - this.missionTime)} TO SPARE`
+          : `OVER BY ${fmtTime(this.missionTime - level.estDuration)}`;
+      } else if (b.id === 'intact') {
+        earned = ship.activeStage === 0;
+        detail = earned ? 'WHOLE VEHICLE RETURNED'
+          : `${ship.activeStage} STAGE${ship.activeStage > 1 ? 'S' : ''} EXPENDED`;
+      }
+      return { ...b, earned, detail };
+    });
+  }
+
   succeed() {
     const ship = this.ship;
     const td = this.lastTouchdown;
     const level = this.level;
+    const diff = this.difficulty;
 
     // Quality is judged on the touchdown if there was one, otherwise on how
     // much propellant is left.
@@ -603,15 +700,22 @@ export class Game {
       quality = clamp(ship.totalFuel / Math.max(1, this.startFuel || 1), 0, 1) * 0.6 + 0.4;
     }
     const padMult = td && td.pad ? td.pad.mult : (td ? OFF_PAD_MULTIPLIER : 1);
-    const fuelFraction = ship.totalFuel / Math.max(1, this.startFuel || ship.totalFuel || 1);
-    const fuelBonus = Math.round(level.reward * 0.25 * clamp(fuelFraction, 0, 1));
     const payout = this.payoutMultiplier;
-    const gross = Math.round(level.reward * (0.5 + 0.5 * quality) * padMult) + fuelBonus;
+
+    // The base payment scales with the difficulty setting; the bonuses do not.
+    // That is the whole difference between the settings: at CADET the base
+    // alone rebuilds the rocket and bonuses are gravy, at FLIGHT DIRECTOR it
+    // does not and they are the budget.
+    const base = Math.round(level.reward * diff.rewardScale
+      * (0.5 + 0.5 * quality) * padMult);
+    const bonuses = this.awardBonuses();
+    const bonusTotal = bonuses.reduce((a, b) => a + (b.earned ? b.value : 0), 0);
+    const gross = base + bonusTotal;
     // Only the mission payment decays on a replay. Recovery is physical: the
     // hardware is worth what it is worth however many times you have flown it,
     // and decaying it would make grinding net-negative.
     const mission = Math.round(gross * payout);
-    const recovered = Math.round(salvageValue(ship) * SALVAGE_INTACT);
+    const recovered = Math.round(salvageValue(ship) * salvageRates(diff).intact);
     const credits = mission + recovered;
 
     this.session.credits += credits;
@@ -624,13 +728,15 @@ export class Game {
       quality,
       credits,
       mission,
+      base,
       gross,
       payout,
       replay: this.isReplay,
       completions: this.session.completions[this.session.levelIndex] || 0,
       recovered,
       expended: ship.activeStage,
-      fuelBonus,
+      bonuses,
+      bonusTotal,
       padMult,
       touchdown: td,
       fuelLeft: ship.totalFuel,
@@ -645,7 +751,8 @@ export class Game {
   fail(reason, detail = {}) {
     this.session.losses += 1;
     const severity = this.severityOf(reason, detail);
-    const rate = lerp(SALVAGE_INTACT, SALVAGE_WRECKED, severity);
+    const rates = salvageRates(this.difficulty);
+    const rate = lerp(rates.intact, rates.wrecked, severity);
     const recovered = this.ship ? Math.round(salvageValue(this.ship) * rate) : 0;
     this.session.credits += recovered;
     this.ensureRebuildable();
@@ -878,6 +985,12 @@ export class Game {
     r.drawStars(dt);
     r.drawBody(this.body);
 
+    if (this.state === STATE.DIFFICULTY) {
+      this.dim(0.85);
+      this.drawDifficulty();
+      return;
+    }
+
     if (this.state === STATE.HANGAR) {
       this.dim(0.78);
       this.hangar.draw(r, this.session, this.body, this.level);
@@ -954,6 +1067,52 @@ export class Game {
       r.text('T HOLD    G HOLD MODE   (needs a flight computer)',
         r.w / 2, r.h * 0.36 + 132, { size: 12, align: 'center', alpha: a * 0.5 });
     }
+  }
+
+  /**
+   * The difficulty choice, shown once before the first hangar. Every setting
+   * flies the same physics and the same twelve levels; what the list explains
+   * is what the economy and the hangar do differently, because that is all
+   * that changes.
+   */
+  drawDifficulty() {
+    const r = this.r;
+    const cx = r.w / 2;
+    const w = Math.min(560, r.w - 80);
+    const x0 = cx - w / 2;
+    let y = Math.max(70, r.h / 2 - 250);
+
+    r.text('LANDER', cx, y, { size: 34, align: 'center', color: COLORS.accent });
+    y += 26;
+    r.text('SELECT A DIFFICULTY', cx, y, { size: 13, align: 'center', alpha: 0.6 });
+    y += 46;
+
+    DIFFICULTIES.forEach((d, i) => {
+      const on = i === this.diffIndex;
+      const h = 44 + d.notes.length * 16;
+      if (on) r.rectS(x0 - 12, y - 22, w + 24, h + 12, COLORS.accent, 0.8);
+      r.text(`${on ? '>' : ' '} ${d.name}`, x0, y,
+        { size: 17, color: on ? COLORS.accent : COLORS.ui, alpha: on ? 1 : 0.55 });
+      r.text(`${Math.round(STARTING_CREDITS * d.credits)} CR TO START`, x0 + w, y,
+        { size: 12, align: 'right', alpha: on ? 0.75 : 0.35 });
+      y += 20;
+      r.text(d.tagline, x0 + 18, y, { size: 12, alpha: on ? 0.75 : 0.35 });
+      y += 18;
+      for (const note of d.notes) {
+        r.text(`- ${note}`, x0 + 18, y, { size: 11, alpha: on ? 0.55 : 0.2 });
+        y += 16;
+      }
+      y += 22;
+    });
+
+    y += 6;
+    r.text('THE PHYSICS, THE LEVELS AND THE LANDING RULES ARE THE SAME AT EVERY SETTING.',
+      cx, y, { size: 11, align: 'center', alpha: 0.4 });
+    y += 28;
+    r.text('W/S SELECT      ENTER CONFIRM', cx, y, {
+      size: 14, align: 'center',
+      alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
+    });
   }
 
   /** Pause overlay, which doubles as the controls reference. */
@@ -1033,7 +1192,6 @@ export class Game {
     if (good) {
       if (res.sample) rows.push(['SAMPLE ABOARD', fmtMass(res.sample), '']);
       rows.push(['LIFE SUPPORT LEFT', fmtTime(res.lifeLeft), '']);
-      rows.push(['FUEL BONUS', `${res.fuelBonus} CR`, '']);
       rows.push(['MISSION PAYMENT', `${res.mission} CR`,
         res.replay ? `${Math.round(res.payout * 100)}% OF ${res.gross}  (REPLAY x${res.completions})` : '']);
       rows.push(['HARDWARE RECOVERED', `${res.recovered} CR`,
@@ -1048,11 +1206,33 @@ export class Game {
 
     const w = Math.min(520, r.w - 80);
     const x0 = cx - w / 2;
+    // Values sit well left of the right edge: the notes beside them are long
+    // ("100% OF 1147 (REPLAY x3)") and used to run into the figure.
+    const vx = x0 + w * 0.58;
     for (const [label, value, note] of rows) {
       r.text(label, x0, y, { size: 12, alpha: 0.55 });
-      r.text(value, x0 + w * 0.74, y, { size: 13, align: 'right' });
+      r.text(value, vx, y, { size: 13, align: 'right' });
       if (note) r.text(note, x0 + w, y, { size: 11, align: 'right', alpha: 0.4 });
       y += 21;
+    }
+
+    // Bonuses, earned and missed. A miss is worth as much screen space as an
+    // award: it is the only place the game says how close you came.
+    if (good && res.bonuses && res.bonuses.length) {
+      y += 8;
+      r.text(`OBJECTIVE BONUSES   ${res.bonusTotal} CR`, x0, y,
+        { size: 11, alpha: 0.55 });
+      y += 18;
+      for (const b of res.bonuses) {
+        const col = b.earned ? COLORS.good : COLORS.ui;
+        r.text(`${b.earned ? '[x]' : '[ ]'} ${b.label}`, x0, y,
+          { size: 12, color: col, alpha: b.earned ? 0.9 : 0.35 });
+        r.text(b.earned ? `+${b.value} CR` : '—', vx, y,
+          { size: 12, align: 'right', color: col, alpha: b.earned ? 0.9 : 0.35 });
+        r.text(b.detail, x0 + w, y,
+          { size: 11, align: 'right', alpha: b.earned ? 0.4 : 0.55, color: b.earned ? COLORS.ui : COLORS.warn });
+        y += 19;
+      }
     }
 
     y += 18;

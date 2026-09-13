@@ -5,10 +5,12 @@
 <canvas id="screen"></canvas>
 <script type="module">
 // Harness: renders one game state statically so it can be screenshot.
-// ?screen=hangar|flight|orbit|map|result  &level=N &hud=N &alt=METRES
+// ?screen=difficulty|hangar|flight|orbit|map|result  &level=N &hud=N &alt=METRES
+// &difficulty=cadet|pilot|director picks the setting the screen is drawn at.
 import { Renderer } from '../js/render.js';
 import { Input } from '../js/input.js';
 import { Game } from '../js/game.js';
+import { difficultyIndexById } from '../js/config.js';
 
 const params = new URLSearchParams(location.search);
 const screen = params.get('screen') || 'hangar';
@@ -20,6 +22,9 @@ const canvas = document.getElementById('screen');
 const renderer = new Renderer(canvas);
 const input = new Input();
 const game = new Game(renderer, input);
+if (params.has('difficulty')) {
+  game.chooseDifficulty(difficultyIndexById(params.get('difficulty')));
+}
 game.hudLayout = hud;
 game.session.credits = 400000;
 game.loadLevel(level);   // also sets session.levelIndex, which gates part unlocks
@@ -53,7 +58,9 @@ function place(altitude, tilt = 0, vs = -12, hs = 4) {
   ship.spool = 0.8;
 }
 
-if (screen === 'hangar') {
+if (screen === 'difficulty') {
+  game.promptDifficulty(Number(params.get('sel') || 0));
+} else if (screen === 'hangar') {
   game.state = 'hangar';
   // Give the hangar something interesting to show.
   game.session.design = {
@@ -90,7 +97,7 @@ if (screen === 'hangar') {
     place(60, 0.05, -1.2, 0.3);
     game.lastTouchdown = {
       speed: 1.42, tiltDeg: 2.3, pad: game.body.pads[0],
-      limitSpeed: 7.4, limitAngle: 21, slope: 0.4,
+      limitSpeed: 7.4, limitAngle: 21, slope: 0.4, offset: 34,
     };
     game.missionTime = 1840;
     game.ship.sampleMass = 240;

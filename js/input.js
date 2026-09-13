@@ -24,6 +24,7 @@ const KEY_MAP = {
   KeyU: ['launch'],
   KeyX: ['stage'],
   KeyN: ['addStage'],
+  KeyB: ['suggest'],
   KeyQ: ['prevLevel'],
   KeyE: ['nextLevel'],
   Comma: ['warpDown'],

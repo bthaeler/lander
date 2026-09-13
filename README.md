@@ -18,12 +18,16 @@ npm run economy    # cheapest viable rocket per level vs. available credits
 ```
 
 To start straight into a level for testing, add `?level=N` (1-based), and
-optionally `&credits=`:
+optionally `&credits=` or `&difficulty=`:
 
 ```
 http://localhost:8080/?level=6
 http://localhost:8080/?level=10&credits=200000
+http://localhost:8080/?difficulty=cadet
 ```
+
+`?difficulty=cadet|pilot|director` also skips the select screen a campaign
+normally opens on.
 
 Everything up to that level is unlocked and you arrive with roughly the credits
 a real playthrough would have. From the browser console, `lander.game.jumpTo(5)`
@@ -44,13 +48,14 @@ does the same thing (0-based there).
 | `M` | Map view, framed on your whole orbit |
 | `H` | Cycle HUD layout (TOP BAR / CORNERS / CLUSTER) |
 | `R` | Abort the mission |
-| In the hangar | `W`/`S` select, `A`/`D` adjust (hold for coarse), `N` add stage, `X` remove stage, `Q`/`E` pick which level to fly, `ENTER` launch |
+| In the hangar | `W`/`S` select, `A`/`D` adjust (hold for coarse), `N` add stage, `X` remove stage, `Q`/`E` pick which level to fly, `B` fit the suggested build (CADET only), `ENTER` launch |
 
 ## How it plays
 
-You start every level **in the hangar**, where the mission tells you what it
-needs: delta-v, duration, whether you have to lift off, and the touchdown
-envelope. You design a rocket to meet it, pay the build cost, and fly.
+A campaign opens on a **difficulty choice**, then you start every level **in
+the hangar**, where the mission tells you what it needs: delta-v, duration,
+whether you have to lift off, and the touchdown envelope. You design a rocket
+to meet it, pay the build cost, and fly.
 
 Landings are scored on **impact speed** and **angle from vertical**. Pads pay a
 multiplier; open ground is allowed under 12° of slope but tightens the envelope
@@ -182,6 +187,50 @@ Over-building still costs you. Recovery is 85%, not 100%, so flying a 31,000
 credit vehicle at a 900 credit contract loses money even with a perfect
 landing — which is the intended pressure to build to the mission.
 
+### Difficulty
+
+Chosen once, before the first hangar. Gravity, drag, engine performance and the
+twelve levels are **identical at every setting** — what changes is the margin
+the economy gives you and how much the hangar tells you, so one set of tuned
+levels stays honest for all three and a player who moves up recognises the game
+they learned.
+
+| | CADET | PILOT | FLIGHT DIRECTOR |
+| --- | --- | --- | --- |
+| Starting credits | 9,000 | 3,000 | 1,800 |
+| Base mission payment | ×1.35 | ×1.0 | ×0.7 |
+| Hardware recovery | ×1.1 | ×1.0 | ×0.85 |
+| Touchdown envelope | ×1.3 | ×1.0 | ×0.85 |
+| Replay payout floor | 50% | 35% | 25% |
+| Hangar | suggests a build | checks yours | states the requirements |
+
+The load-bearing asymmetry is in the first two rows: the **base** payment
+scales with the setting, but the **bonuses** below do not. At CADET the base
+alone rebuilds the rocket and bonuses are gravy; at FLIGHT DIRECTOR it does
+not, and flying precisely is how you stay solvent.
+
+### Objective bonuses
+
+Paid on top of the mission for flying well rather than merely arriving. Each is
+all-or-nothing against a threshold stated in the hangar *before* you fly, and a
+miss is reported with the margin it was missed by — "short by 40 kg" is the
+most useful thing a results screen can say.
+
+| Bonus | Earned by | Worth |
+| --- | --- | --- |
+| Precision landing | Within 30% of the pad's half-width of its centre | 15% of the reward |
+| Fuel margin | 15% of the surviving stages' propellant still aboard | 20% |
+| On schedule | Mission finished inside its estimated duration | 10% |
+| Intact return | No stages expended | 15% |
+
+Which bonuses a level offers is **derived from the mission**, not declared per
+level, so a level cannot ship with one that is impossible to earn: precision
+needs a mission that ends on a named pad, and intact return needs one a single
+stage can fly (airless, under 2,500 m/s). The fuel margin is measured against
+the stages you still have rather than the whole launch load — 15% of an Earth
+launcher's propellant is more than the lander masses, which would make the
+bonus unearnable on exactly the missions where a reserve matters most.
+
 ### Replaying levels for money
 
 `Q` and `E` in the hangar pick which level to fly: anything you have already
@@ -195,11 +244,11 @@ always mine for money. It is just slow, and how slow depends on where you grind
 
 | Grind site | Net per run |
 | --- | --- |
-| Level 1, First Light | +158 |
-| Level 3, Hop | +475 |
-| Level 8, Sample Return | +1,770 |
-| Level 9, Thick Air | +8,703 |
-| Level 10, Earth Orbit | **−31,892** |
+| Level 1, First Light | +134 |
+| Level 3, Hop | +425 |
+| Level 8, Sample Return | +1,324 |
+| Level 9, Thick Air | +7,916 |
+| Level 10, Earth Orbit | **−26,598** |
 
 The gradient falls out of the rules rather than being tuned in: the floor is a
 fraction of that level's *own* reward, so harder contracts grind better — and

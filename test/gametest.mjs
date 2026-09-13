@@ -1,10 +1,14 @@
 // End-to-end test through the real Game state machine with a stub renderer.
 const ROOT = new URL('../js/', import.meta.url).href;
 const { Game } = await import(ROOT + 'game.js');
-const { LEVELS, WARP_LEVELS } = await import(ROOT + 'config.js');
+const {
+  LEVELS, WARP_LEVELS, BODIES, STARTING_CREDITS,
+  difficultyIndexById, salvageRates, bonusesFor,
+} = await import(ROOT + 'config.js');
+const { Body } = await import(ROOT + 'body.js');
 const { elementsFromState, timeToApoapsis } = await import(ROOT + 'orbit.js');
 const {
-  designStats, salvageValue, inertiaFor, availableEngines,
+  designStats, salvageValue, inertiaFor, availableEngines, suggestDesign,
 } = await import(ROOT + 'design.js');
 const { wrapAngle, clamp, DEG } = await import(ROOT + 'util.js');
 
@@ -962,6 +966,202 @@ console.log('all levels load and are internally consistent:');
     if (game.state !== 'flying') bad = 'launch failed';
     ok(`L${lvl.id} ${lvl.title}`, bad === '', bad);
   }
+}
+
+// --- difficulty --------------------------------------------------------------
+console.log('difficulty selection:');
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  ok('a new Game is playable without choosing', game.state === 'hangar');
+  ok('and defaults to PILOT', game.difficulty.id === 'pilot');
+
+  game.promptDifficulty();
+  ok('the select screen is reachable', game.state === 'difficulty');
+  input.press('up');
+  game.update(DT); input.endFrame();
+  ok('W moves up the list', game.diffIndex === 0);
+  input.press('confirm');
+  game.update(DT); input.endFrame();
+  ok('ENTER starts the campaign', game.state === 'hangar');
+  ok('on the chosen setting', game.difficulty.id === 'cadet');
+  ok('with that setting\'s budget',
+    game.session.credits === Math.round(STARTING_CREDITS * game.difficulty.credits),
+    `${game.session.credits} cr`);
+}
+
+console.log('each setting scales the economy, not the physics:');
+{
+  const mk = (id) => {
+    const g = new Game(stubRenderer(), new StubInput());
+    g.chooseDifficulty(difficultyIndexById(id));
+    return g;
+  };
+  const cadet = mk('cadet');
+  const pilot = mk('pilot');
+  const director = mk('director');
+
+  ok('credits rank cadet > pilot > director',
+    cadet.session.credits > pilot.session.credits
+    && pilot.session.credits > director.session.credits,
+    `${cadet.session.credits} / ${pilot.session.credits} / ${director.session.credits}`);
+  ok('touchdown limits rank the same way',
+    cadet.envelope.speed > pilot.envelope.speed
+    && pilot.envelope.speed > director.envelope.speed,
+    `${cadet.envelope.speed.toFixed(1)} / ${pilot.envelope.speed.toFixed(1)} ` +
+    `/ ${director.envelope.speed.toFixed(1)} m/s`);
+  ok('salvage rates rank the same way',
+    salvageRates(cadet.difficulty).intact > salvageRates(pilot.difficulty).intact
+    && salvageRates(pilot.difficulty).intact > salvageRates(director.difficulty).intact);
+  ok('salvage never reaches a full refund',
+    salvageRates(cadet.difficulty).intact < 1);
+  // The load-bearing claim of the whole feature: the simulation is identical.
+  const bodies = [cadet, pilot, director].map((g) => g.body);
+  ok('gravity is identical at every setting',
+    bodies.every((b) => b.surfaceGravity() === bodies[0].surfaceGravity()));
+  ok('the level list is identical at every setting',
+    [cadet, pilot, director].every((g) => g.level.estDeltaV === LEVELS[0].estDeltaV));
+}
+
+console.log('objective bonuses:');
+{
+  for (let i = 0; i < LEVELS.length; i++) {
+    const level = LEVELS[i];
+    const body = new Body(BODIES[level.body]);
+    const list = bonusesFor(level, body);
+    const last = level.objectives[level.objectives.length - 1];
+    const endsOnPad = last.type === 'land' && !!last.pad;
+    const hasPrecision = list.some((b) => b.id === 'precision');
+    // An unearnable bonus is worse than no bonus: precision needs a pad to be
+    // precise about, and intact return needs a mission a single stage can fly.
+    if (hasPrecision !== endsOnPad) {
+      ok(`L${level.id} precision bonus matches the mission`, false,
+        `offered=${hasPrecision} endsOnPad=${endsOnPad}`);
+    }
+    if (list.some((b) => b.id === 'intact') && body.atmosphere) {
+      ok(`L${level.id} intact return is not offered through an atmosphere`, false);
+    }
+    if (!list.length) ok(`L${level.id} offers at least one bonus`, false);
+  }
+  ok('every level offers only bonuses it is possible to earn', true,
+    `${LEVELS.length} levels checked`);
+
+  // A perfect flight of level 1, flown by the descent autopilot.
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.session.design = {
+    rcs: 1, legs: 1, lifeSupport: 1,
+    stages: [{ engineId: 'lm1', engineCount: 1, fuel: 400 }],
+  };
+  game.launch();
+  const pad = game.body.padByName('alpha');
+  let guard = 0;
+  while (game.state === 'flying' && guard++ < 60 * 600) {
+    descentAutopilot(game, input, pad.theta);
+    game.update(DT);
+    input.endFrame();
+  }
+  input.clear();
+  const res = game.result;
+  ok('a successful flight is graded against bonuses',
+    res.success && Array.isArray(res.bonuses) && res.bonuses.length > 0);
+  for (const b of res.bonuses) {
+    console.log(`       ${b.earned ? '[x]' : '[ ]'} ${b.label.padEnd(18)} ` +
+      `${String(b.earned ? '+' + b.value : 0).padStart(6)} CR   ${b.detail}`);
+  }
+  ok('every bonus reports a margin either way',
+    res.bonuses.every((b) => b.detail && b.detail.length > 0));
+  ok('the bonus total is what was actually added',
+    res.bonusTotal === res.bonuses.reduce((a, b) => a + (b.earned ? b.value : 0), 0));
+  ok('payment is base plus bonuses', res.gross === res.base + res.bonusTotal,
+    `${res.base} + ${res.bonusTotal} = ${res.gross}`);
+  ok('a dead-centre landing earns the precision bonus',
+    res.bonuses.find((b) => b.id === 'precision')?.earned === true,
+    `${game.lastTouchdown.offset.toFixed(1)} m off centre`);
+  ok('the fuel reserve is measured against the stages still attached',
+    res.bonuses.find((b) => b.id === 'fuel') !== undefined);
+
+  // Same flight, same physics, different setting: only the money moves.
+  const runAt = (id) => {
+    const inp = new StubInput();
+    const g = new Game(stubRenderer(), inp);
+    g.chooseDifficulty(difficultyIndexById(id));
+    // Same vehicle at both settings, so only the payment can differ.
+    g.session.credits = 100000;
+    g.session.design = {
+      rcs: 1, legs: 1, lifeSupport: 1,
+      stages: [{ engineId: 'lm1', engineCount: 1, fuel: 400 }],
+    };
+    g.launch();
+    let n = 0;
+    while (g.state === 'flying' && n++ < 60 * 600) {
+      descentAutopilot(g, inp, pad.theta);
+      g.update(DT);
+      inp.endFrame();
+    }
+    inp.clear();
+    return g.result;
+  };
+  const cadetRes = runAt('cadet');
+  const dirRes = runAt('director');
+  ok('the same flight earns the same bonuses at every setting',
+    cadetRes.bonusTotal === dirRes.bonusTotal,
+    `${cadetRes.bonusTotal} cr both`);
+  ok('but a lower base payment on the harder setting',
+    cadetRes.base > dirRes.base, `${cadetRes.base} vs ${dirRes.base}`);
+  // This is the shape the feature is for: bonuses are a rounding error on the
+  // easy setting and most of the payment on the hard one.
+  const share = (r) => r.bonusTotal / (r.base + r.bonusTotal);
+  ok('so bonuses matter more the harder it gets', share(dirRes) > share(cadetRes),
+    `${(share(cadetRes) * 100).toFixed(0)}% -> ${(share(dirRes) * 100).toFixed(0)}% of payment`);
+}
+
+console.log('suggested builds:');
+{
+  const game = new Game(stubRenderer(), new StubInput());
+  for (let i = 0; i < LEVELS.length; i++) {
+    const level = LEVELS[i];
+    const body = new Body(BODIES[level.body]);
+    const s = suggestDesign(level, body, i);
+    let bad = '';
+    if (!s) bad = 'no suggestion';
+    else {
+      if (s.stats.deltaV < level.estDeltaV) bad = `short on dV (${s.stats.deltaV.toFixed(0)})`;
+      if (level.start.type === 'surface' && s.stats.liftoffTWR < 1.25) {
+        bad = `cannot lift off (TWR ${s.stats.liftoffTWR.toFixed(2)})`;
+      }
+      if (s.stats.lifeSeconds < level.estDuration) bad = 'life support too short';
+      // A hint the player cannot act on is not a hint. It only has to be
+      // affordable at CADET, which is the only setting that shows it.
+      if (s.stats.cost > 400000) bad = `absurdly expensive (${s.stats.cost})`;
+    }
+    ok(`L${level.id} suggestion flies the mission`, bad === '',
+      bad || `${s.design.stages.length} stage, ${s.stats.cost} cr, ` +
+        `${s.stats.deltaV.toFixed(0)}/${level.estDeltaV} m/s`);
+  }
+
+  // And the suggestion is actually launchable through the real game.
+  game.chooseDifficulty(difficultyIndexById('cadet'));
+  game.session.credits = 500000;
+  const input = new StubInput();
+  game.input = input;
+  input.press('suggest');
+  game.update(DT); input.endFrame();
+  ok('B fits the suggested build at CADET',
+    game.session.design.stages.length >= 1
+    && game.session.design.stages[0].fuel !== 400);
+  game.launch();
+  ok('and the fitted build launches', game.state === 'flying');
+
+  const strict = new Game(stubRenderer(), new StubInput());
+  strict.chooseDifficulty(difficultyIndexById('director'));
+  const before = JSON.stringify(strict.session.design);
+  const inp2 = new StubInput();
+  strict.input = inp2;
+  inp2.press('suggest');
+  strict.update(DT); inp2.endFrame();
+  ok('but not at FLIGHT DIRECTOR',
+    JSON.stringify(strict.session.design) === before);
 }
 
 console.log(failures === 0 ? '\nALL GAME TESTS PASSED' : `\n${failures} FAILURE(S)`);

@@ -209,3 +209,175 @@ export function cycleEngine(stage, dir, levelIndex) {
   const next = (i + dir + list.length) % list.length;
   stage.engineId = list[next].id;
 }
+
+// --- suggested build --------------------------------------------------------
+// The hangar's CADET hint: a vehicle that meets the mission, chosen to be
+// cheap rather than clever. It exists so a new player has somewhere to start
+// and something to modify, not so they can skip the design decision.
+
+/**
+ * Delta-v reserve over the level's estimate. A first-time player wastes
+ * propellant hovering, and a cheaper rocket they cannot land is not the
+ * cheaper option -- but the reserve is capped in m/s rather than left as a
+ * percentage, because a percentage compounds through the rocket equation. A
+ * 35% margin on a lunar hop is a few hundred kilograms; the same margin on an
+ * Earth ascent quintuples the launcher.
+ */
+const SUGGEST_RESERVE_FRACTION = 0.35;
+const SUGGEST_RESERVE_CAP = 300;   // m/s
+/** Thrust-to-weight the bottom stage needs at liftoff. */
+const SUGGEST_LIFTOFF_TWR = 1.4;
+/** Thrust-to-weight the last stage needs to hover and land on its own. */
+const SUGGEST_LANDING_TWR = 1.6;
+/** Middle stages need not hover, but must out-accelerate gravity usefully. */
+const SUGGEST_MID_TWR = 0.8;
+const MAX_SUGGEST_ENGINES = 6;
+
+/**
+ * How the delta-v is split between stages, bottom stage first. An even split
+ * is rarely the cheapest: the bottom stage carries everything above it, so
+ * giving it a larger share often buys a smaller stack overall. Both are tried
+ * and costed.
+ */
+function splitProfiles(n) {
+  const even = new Array(n).fill(1 / n);
+  if (n === 1) return [even];
+  const weights = [];
+  let total = 0;
+  for (let i = 0; i < n; i++) { const w = n - i; weights.push(w); total += w; }
+  return [even, weights.map((w) => w / total)];
+}
+
+/**
+ * Propellant a stage needs to deliver `dv` while carrying `above` kilograms.
+ *
+ * Closed form rather than a search. The tank's dry mass is a fixed fraction of
+ * the propellant it holds, so with f the propellant and E the fixed stage mass:
+ *
+ *   (above + E + kf + f) / (above + E + kf) = exp(dv/ve) = K + 1
+ *   =>  f = (above + E) * K / (1 - kK)
+ *
+ * The denominator going non-positive is not a numerical failure -- it is the
+ * point where tank structure eats the whole mass ratio and no amount of
+ * propellant delivers the delta-v. That is what forces staging, so it returns
+ * null and the caller tries more stages.
+ */
+function sizeStage(engine, count, dv, ve, above) {
+  const K = Math.exp(dv / ve) - 1;
+  const denom = 1 - TANK_DRY_FRACTION * K;
+  if (denom <= 0.05) return null;
+  const fixed = engine.mass * count + STAGE_STRUCTURE;
+  const fuel = ((above + fixed) * K) / denom;
+  if (!isFinite(fuel) || fuel <= 0 || fuel > TANK.max) return null;
+  return Math.max(TANK.min, Math.round(fuel));
+}
+
+/**
+ * Cheapest vehicle this engine assignment can fly the mission with, or null.
+ * Stages are sized from the top down, since each one has to lift everything
+ * above it.
+ */
+function buildCandidate(engineIds, level, body, payloadPicks, targetDv, split) {
+  const g = body.surfaceGravity();
+  const needsLiftoff = level.start.type === 'surface';
+  const n = engineIds.length;
+
+  const stages = new Array(n);
+  let above = payloadStats(payloadPicks).mass;
+
+  for (let i = n - 1; i >= 0; i--) {
+    const engine = engineById(engineIds[i]);
+    // Only the bottom stage burns at sea level, and designStats blends its
+    // exhaust velocity the same way, so size against the figure it will grade.
+    const ve = i === 0 && body.atmosphere
+      ? (engine.veVac + engine.veSea) / 2 : engine.veVac;
+
+    // Enough engines to meet the thrust the stage's job needs: lifting the
+    // stack off the pad at the bottom, hovering the lander at the top, and in
+    // between simply not wallowing.
+    let count = 1;
+    let fuel = null;
+    for (; count <= MAX_SUGGEST_ENGINES; count++) {
+      fuel = sizeStage(engine, count, targetDv * split[i], ve, above);
+      if (fuel === null) break;
+      const wet = fuel * (1 + TANK_DRY_FRACTION) + engine.mass * count + STAGE_STRUCTURE;
+      const thrust = engine.thrust * count;
+      if (i === 0 && needsLiftoff) {
+        // The bottom stage lifts everything.
+        if (thrust >= (above + wet) * g * SUGGEST_LIFTOFF_TWR) break;
+      } else if (i === n - 1) {
+        // The last stage lands on its own, near dry.
+        const landingMass = above + wet - fuel * 0.85;
+        if (thrust >= landingMass * g * SUGGEST_LANDING_TWR) break;
+      } else if (thrust >= (above + wet) * g * SUGGEST_MID_TWR) break;
+    }
+    if (fuel === null || count > MAX_SUGGEST_ENGINES) return null;
+
+    stages[i] = { engineId: engine.id, engineCount: count, fuel };
+    above += fuel * (1 + TANK_DRY_FRACTION) + engine.mass * count + STAGE_STRUCTURE;
+  }
+
+  const design = { ...payloadPicks, stages };
+  const stats = designStats(design, body);
+  if (stats.deltaV < level.estDeltaV) return null;
+  if (needsLiftoff && stats.liftoffTWR < 1.25) return null;
+  return { design, stats };
+}
+
+/**
+ * A vehicle that meets `level`, or null if nothing in the unlocked catalogue
+ * does. Deterministic: same level and same unlocks, same rocket.
+ */
+export function suggestDesign(level, body, frontier) {
+  const engines = availableEngines(frontier);
+  // Half again the estimated mission, rounded up to whole canisters.
+  const lifeSupport = Math.max(1,
+    Math.ceil((level.estDuration * 1.5) / (LIFE_SUPPORT.hours * 3600)));
+  // Gear tier is a landing decision: tighter envelopes want more absorption.
+  const legs = level.envelope.speed <= 6 ? 2 : level.envelope.speed <= 8 ? 1 : 0;
+
+  let best = null;
+  // Two passes over the attitude tier: the right RCS depends on the vehicle's
+  // inertia, which is not known until the vehicle exists.
+  let rcs = 1;
+  for (let pass = 0; pass < 2; pass++) {
+    const picks = { rcs, legs, computer: 0, lifeSupport };
+    best = null;
+    for (let n = 1; n <= 3; n++) {
+      // Every assignment of unlocked engines to n stages. Small enough to
+      // enumerate (at most 5^3), and exhaustive beats clever here.
+      const total = engines.length ** n;
+      for (let code = 0; code < total; code++) {
+        const ids = [];
+        let c = code;
+        for (let s = 0; s < n; s++) { ids.push(engines[c % engines.length].id); c = Math.floor(c / engines.length); }
+        for (const split of splitProfiles(n)) {
+          // Walk the reserve up only until something flies: more delta-v is
+          // for when the design would not close at all, not a free upgrade.
+          for (let extra = 0; extra <= 0.45; extra += 0.15) {
+            const dv = level.estDeltaV * (1 + extra)
+              + Math.min(level.estDeltaV * SUGGEST_RESERVE_FRACTION, SUGGEST_RESERVE_CAP);
+            const cand = buildCandidate(ids, level, body, picks, dv, split);
+            if (!cand) continue;
+            // Strictly cheaper to displace, and n ascends, so a tie goes to
+            // the simpler rocket.
+            if (!best || cand.stats.cost < best.stats.cost) best = cand;
+            break;
+          }
+        }
+      }
+    }
+    if (!best) return null;
+    // Pick the attitude tier closest to a comfortable half a radian per second
+    // squared, then rebuild once so its mass is actually accounted for.
+    const inertia = best.stats.inertiaWet;
+    let bestRcs = 0, bestErr = Infinity;
+    RCS_TIERS.forEach((t, i) => {
+      const err = Math.abs(t.torque / inertia - 0.5);
+      if (err < bestErr) { bestErr = err; bestRcs = i; }
+    });
+    if (bestRcs === rcs) break;
+    rcs = bestRcs;
+  }
+  return best;
+}
