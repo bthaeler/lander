@@ -247,10 +247,14 @@ docs/               ROADMAP.md (what is built, what is next)
 
 ## Status
 
-See `docs/ROADMAP.md`. Phases 1–6 and 8 are done; the interplanetary capstone
-(Earth → Moon → Earth) is Phase 7 and not started — the open problem there is
-not the physics but how a player aims a transfer with rotate-and-thrust
-controls and no maneuver nodes.
+See `docs/ROADMAP.md`. Phases 1–6 and 8 are done. Planned next are difficulty
+levels (Phase 9 — a launch-time CADET/PILOT/FLIGHT DIRECTOR choice that scales
+the economy and the hangar's hints, not the physics) and navigation assistants
+(Phase 10 — an upgrade ladder where today's free orbit projection becomes the
+first rung and the top tier flies the landing for you). The interplanetary
+capstone (Earth → Moon → Earth) is Phase 7 and not started — the open problem
+there is not the physics but how a player aims a transfer with
+rotate-and-thrust controls and no maneuver nodes.
 
 **Nothing here has been human-playtested.** It is verified by autopilots and
 headless-browser captures, so the difficulty curve — especially the Earth

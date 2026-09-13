@@ -204,6 +204,122 @@ has **exactly zero angular momentum**, which makes its conic degenerate.
 - [ ] Save/resume a campaign between sessions
 - [ ] Rebindable keys
 
+## Phase 9 — Difficulty levels `[ ]`
+
+Chosen once at launch, before the first hangar. The campaign, the physics and
+the landing rules are identical at every setting — what changes is **how much
+margin the economy gives you**, so the difference is "can you afford a second
+attempt" rather than "is the rocket equation different for you". That keeps a
+single set of tuned levels and one `npm run economy` model.
+
+- [ ] `STATE.DIFFICULTY` — a select screen ahead of `STATE.HANGAR`, shown on
+      first launch and reachable from the hangar only via a new game. Three
+      settings: **CADET / PILOT / FLIGHT DIRECTOR**. `main.js` gets
+      `?difficulty=` alongside `?level=`, and `session.difficulty` rides with
+      `session.frontier` and `session.credits`.
+- [ ] `DIFFICULTY` table in `config.js`, read by the same code paths the
+      economy already uses, so no new economic mechanics:
+      `startingCredits` (multiplies `STARTING_CREDITS`), `rewardScale` (on
+      `level.reward`), `salvageScale` (on `SALVAGE_INTACT`/`SALVAGE_WRECKED`),
+      `replayFloor` (overrides `REPLAY_FLOOR`), `envelopeScale` (on
+      `level.envelope.speed` and `.angle`), and `hints`.
+- [ ] On **FLIGHT DIRECTOR**, bonuses are the difference between solvent and
+      stuck: the reward scale is low enough that a clean flight pays for the
+      next build and a crash does not. This is where the objective-bonus system
+      has to exist as its own thing rather than a flat `reward` —
+      **precision landing** (inside pad centre tolerance), **fuel margin**
+      (propellant left as a fraction of the build), **mission time** under the
+      level's `estDuration`, and **hardware returned whole**. Bonuses are
+      listed in the brief so they are a plan, not a surprise on the results
+      screen.
+- [ ] Bonuses exist at every setting — on CADET they are gravy, on FLIGHT
+      DIRECTOR they are the budget. One code path, one set of numbers.
+- [ ] Results screen itemises each bonus earned and each one missed, with the
+      margin by which it was missed. Missing "fuel margin by 40 kg" is the
+      single most useful thing the game can tell a player.
+- [ ] Hangar hint levels driven by `difficulty.hints`:
+      - CADET: a **suggested build** — a recommended stage count, tank size,
+        engine and leg tier derived from `estDeltaV` and the level's landing
+        envelope, offered as "BUILD THIS" one-key fill plus a line explaining
+        *why* each choice ("stage 1 sized for 1980 m/s at 0.85 t/t").
+      - PILOT: the requirements panel and the mass/ΔV budget as today, plus a
+        pass/fail readiness check, no prescription.
+      - FLIGHT DIRECTOR: requirements only. The mass budget stays — that is
+        arithmetic, not a hint — but readiness checks and the twitchy/sluggish
+        warnings are off.
+- [ ] `npm run economy` runs the whole seeded campaign at all three settings
+      and reports net income per level for each, so a setting that quietly
+      becomes unwinnable shows up as a negative column rather than a
+      complaint. FLIGHT DIRECTOR is allowed to be near zero on a clean flight;
+      it is not allowed to be negative on a *perfect* one.
+
+Deliberately **not** varied by difficulty: gravity, drag, engine performance,
+touchdown limits beyond `envelopeScale`, and the levels themselves. A player
+who moves up a setting should recognise the game they already learned.
+
+## Phase 10 — Navigation assistants `[ ]`
+
+A second upgrade ladder next to `COMPUTER_TIERS`, bought in the hangar with
+mass and cost like everything else. The split between the two is the point:
+
+- **Flight computer** (`COMPUTER_TIERS`) is the *muscle* — it holds an
+  attitude and, at FC-3, works a throttle.
+- **Navigation assistant** (`NAV_TIERS`, new) is the *plan* — it works out
+  where the ship should be, how fast, and pointing which way.
+
+The top nav tier flies the mission by handing its plan to the flight computer,
+which means the two ladders multiply rather than duplicate: NAV-3 with no
+flight computer shows you a perfect descent you have to fly by hand.
+
+- [ ] **NAV-1 PROJECTOR** — the projected orbit conic, apoapsis/periapsis
+      markers, the IMPACT marker and the surface-crossing clip. All of this
+      exists today and is currently free; this makes it the first rung.
+      Cheap, light, and **pre-installed at CADET** so a new player never meets
+      the game without it.
+- [ ] **NAV-2 DIRECTOR** — a flown path drawn ahead of the ship: waypoint
+      markers on the trajectory, a target attitude cue on the horizon ribbon,
+      and burn markers ("BURN IN 42 s, 18 s LONG, RETROGRADE"). Tells you
+      *what to do and when*; you still judge how hard.
+- [ ] **NAV-3 PROFILE** — the full schedule. Target speed and acceleration at
+      every point of the descent or ascent, drawn as a target-vs-actual pair
+      the pilot flies to null, plus throttle and ΔV budget remaining against
+      the plan. This is the tier that teaches: a player who flies NAV-3 by
+      hand for a level or two learns the actual shape of a gravity turn and a
+      braking curve.
+- [ ] **NAV-4 AUTOLAND** — computes the plan and executes it end to end, given
+      a flight computer with the authority to act on it. Requires FC-2 for
+      attitude-only guidance and FC-3 to take the throttle; without one it
+      degrades to NAV-3 with a loud "NO ACTUATOR" note in the hangar rather
+      than silently doing nothing.
+- [ ] NAV-4 is the on-ramp: at CADET it is affordable from the starting budget
+      on level 1, so a first-time player can buy it, press one key, and *watch
+      a correct flight* before trying one. Manual input always overrides and
+      drops it to advisory for the rest of the flight — the way to learn from
+      an autopilot is to take the controls back mid-descent.
+- [ ] It is also expensive in mass and money at the higher settings, so flying
+      it every mission is a real cost. The intended arc is CADET-watch, then
+      PILOT-with-NAV-2, then FLIGHT-DIRECTOR-with-NAV-1 because the mass is
+      better spent on propellant.
+- [ ] HUD ownership: nav guidance is a distinct overlay layer in `hud.js` /
+      `render.js`, gated on the installed tier, so a NAV-0 ship gets today's
+      unassisted display and nothing has to be un-drawn.
+
+**Open decision — FC-3's DESCENT assist.** It already lands level 1 hands-off,
+which is NAV-4's job under this split. Either it moves to NAV-4 (clean, but
+retunes a shipped tier and the Phase 8 verification), or it stays as a crude
+throttle-only braking hold while NAV-4 is the one that flies a *mission* —
+launch, orbit, transfer, descent — and picks the landing site. Leaning toward
+the second: it keeps the two ladders independently useful and keeps the
+existing test honest.
+
+| Tier | Gives you | Needs |
+| --- | --- | --- |
+| NAV-0 | HUD numbers only | — |
+| NAV-1 PROJECTOR | Orbit conic, apsis and impact markers | — |
+| NAV-2 DIRECTOR | Path to follow, burn cues, attitude targets | — |
+| NAV-3 PROFILE | Target speed/acceleration schedule, ΔV vs plan | — |
+| NAV-4 AUTOLAND | Flies it | FC-2 (attitude) / FC-3 (full) |
+
 ## Phase 7 — Interplanetary `[ ]` (the capstone, not started)
 
 - [ ] Multi-body: Moon orbiting Earth, n-body acceleration summation
@@ -242,7 +358,9 @@ and no maneuver nodes.
 - **Not human-playtested.** Everything is verified by autopilots and
   screenshots. The difficulty curve, especially levels 9 and 10, is a guess
   until someone flies it. Earth ascent needs a real gravity turn and is a
-  large step up from Luna.
+  large step up from Luna. Phase 9 gives a struggling player more budget and
+  Phase 10 gives them guidance, but neither fixes a badly shaped level —
+  widening the margin is not the same as getting the curve right.
 - **Body rotation is not modelled.** A landed ship has no surface velocity and
   there are no launch windows. Revisit with Phase 7, where it starts to matter.
 - Rendezvous and docking.
