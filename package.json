@@ -3,6 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "description": "A 2D orbital lander: real two-body physics, multi-stage rocket design, and landings from orbit.",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "start": "node server.js",

@@ -334,3 +334,7 @@ rotate-and-thrust controls and no maneuver nodes.
 **Nothing here has been human-playtested.** It is verified by autopilots and
 headless-browser captures, so the difficulty curve — especially the Earth
 ascent — is an educated guess until someone actually flies it.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
