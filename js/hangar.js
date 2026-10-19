@@ -26,10 +26,20 @@ export class Hangar {
     this.holdTime = 0;
     this.repeatTimer = 0;
     this.dt = 1 / 60;
+    // Columns scroll when the screen is too short for them (a phone held
+    // sideways). Offsets, content heights and on-screen extents per column,
+    // plus the editor's row positions in content coordinates for tapping.
+    this.scroll = {};
+    this.content = {};
+    this.views = {};
+    this.rowRects = [];
+    this.reveal = false;   // scroll the editor to the selection on next draw
   }
 
   reset() {
     this.selection = 0;
+    this.scroll = {};
+    this.reveal = true;
     this.message = '';
     this.messageTime = 0;
     // The suggested build is a search, so it is computed once per level and
@@ -82,8 +92,10 @@ export class Hangar {
     const rows = this.rows(design);
     this.selection = clamp(this.selection, 0, rows.length - 1);
 
+    const before = this.selection;
     if (input.wasPressed('up')) this.selection = (this.selection - 1 + rows.length) % rows.length;
     if (input.wasPressed('down')) this.selection = (this.selection + 1) % rows.length;
+    this.pointer(input, rows.length);
 
     // Left/right adjust, with key repeat so large tanks are editable.
     let dir = 0;
@@ -125,9 +137,73 @@ export class Hangar {
     }
 
     if (input.wasPressed('suggest')) this.fitSuggestion(session, body, level);
+    if (this.selection !== before) this.reveal = true;
 
     if (input.wasPressed('launch') || input.wasPressed('confirm')) return 'launch';
     return null;
+  }
+
+  /** Taps select an editor row; drags and the wheel scroll a column. */
+  pointer(input, rowCount) {
+    for (const t of input.taps || []) {
+      const v = this.views.editor;
+      if (!v || !inView(v, t)) continue;
+      const y = t.y + (this.scroll.editor || 0);
+      const i = this.rowRects.findIndex((rr) => y >= rr.y0 && y < rr.y1);
+      if (i >= 0 && i < rowCount) this.selection = i;
+    }
+    for (const sc of input.scrolls || []) {
+      for (const [key, v] of Object.entries(this.views)) {
+        if (inView(v, sc)) this.scroll[key] = (this.scroll[key] || 0) + sc.dy;
+      }
+    }
+  }
+
+  /**
+   * Draw one column, scrolled and clipped to [top, bottom] if its content
+   * (as measured last frame) is taller than that. Returns where the content
+   * ends on screen.
+   */
+  column(r, key, x, w, pad, top, bottom, draw) {
+    const viewTop = top - 18;
+    const viewH = bottom - viewTop;
+    const max = Math.max(0, (this.content[key] || 0) - viewH);
+    const s = clamp(this.scroll[key] || 0, 0, max);
+    this.scroll[key] = s;
+    this.views[key] = { x0: x - pad, x1: x + w + pad, y0: viewTop, y1: bottom };
+
+    const ctx = r.ctx;
+    ctx.save();
+    if (max > 0) {
+      ctx.beginPath();
+      ctx.rect(0, viewTop, r.w, viewH);
+      ctx.clip();
+      ctx.translate(0, -s);
+    }
+    const end = draw();
+    ctx.restore();
+    this.content[key] = end - viewTop + 6;
+
+    // A scroll bar in the gutter, only when there is something to scroll.
+    if (max > 0) {
+      const bx = x + w + pad * 0.5;
+      const thumb = Math.max(24, viewH * (viewH / this.content[key]));
+      const ty = viewTop + (viewH - thumb) * (s / max);
+      r.lineS(bx, viewTop, bx, bottom, COLORS.ui, 0.12);
+      r.lineS(bx, ty, bx, ty + thumb, COLORS.accent, 0.7, 2);
+    }
+    return end - s;
+  }
+
+  /** Keep the selected editor row on screen after it moves. */
+  revealSelection() {
+    const v = this.views.editor;
+    const rr = this.rowRects[this.selection];
+    this.reveal = false;
+    if (!v || !rr) return;
+    const s = this.scroll.editor || 0;
+    if (rr.y0 - s < v.y0 + 4) this.scroll.editor = rr.y0 - v.y0 - 4;
+    else if (rr.y1 - s > v.y1 - 4) this.scroll.editor = rr.y1 - v.y1 + 4;
   }
 
   /**
@@ -180,7 +256,7 @@ export class Hangar {
 
   // --- drawing ---------------------------------------------------------------
 
-  draw(r, session, body, level) {
+  draw(r, session, body, level, touch = false) {
     const design = session.design;
     const stats = designStats(design, body);
     const rows = this.rows(design);
@@ -206,29 +282,40 @@ export class Hangar {
     y += 11;
     r.lineS(m, y, r.w - m, y, COLORS.ui, 0.3);
     const top = y + 26;
+    const fy = r.bottom - m;
+    const viewBottom = fy - 40;
 
-    const bottom = this.drawMission(r, xA, top, colA, body, level, session);
-    this.drawSilhouette(r, xA, bottom + 18, colA, r.h - m - 52 - (bottom + 18), stats);
-    this.drawEditor(r, xB, top, colB, design, rows, session);
-    this.drawVehicle(r, xC, top, colC, stats, body, level, session);
+    const bottom = this.column(r, 'mission', xA, colA, gap, top, viewBottom,
+      () => this.drawMission(r, xA, top, colA, body, level, session, touch));
+    if (!this.scroll.mission) {
+      this.drawSilhouette(r, xA, bottom + 18, colA, fy - 52 - (bottom + 18), stats);
+    }
+    if (this.reveal) this.revealSelection();
+    this.column(r, 'editor', xB, colB, gap, top, viewBottom,
+      () => this.drawEditor(r, xB, top, colB, design, rows, session));
+    this.column(r, 'vehicle', xC, colC, gap, top, viewBottom,
+      () => this.drawVehicle(r, xC, top, colC, stats, body, level, session, touch));
 
-    const fy = r.h - m;
     r.lineS(m, fy - 32, r.w - m, fy - 32, COLORS.ui, 0.22);
     if (this.messageTime > 0) {
       r.text(this.message, m, fy - 9, { size: 13, color: COLORS.accent });
     } else {
-      const keys = 'W/S SELECT   A/D ADJUST (HOLD FOR COARSE)   N ADD STAGE   X REMOVE   Q/E LEVEL'
-        + (diff.hints === 'full' ? '   B SUGGESTED BUILD' : '');
+      const keys = touch
+        ? 'TAP A ROW TO SELECT   ◀ ▶ ADJUST (HOLD FOR COARSE)   DRAG A COLUMN TO SCROLL'
+        : 'W/S SELECT   A/D ADJUST (HOLD FOR COARSE)   N ADD STAGE   X REMOVE   Q/E LEVEL'
+          + (diff.hints === 'full' ? '   B SUGGESTED BUILD' : '');
       r.text(keys, m, fy - 9, { size: 12, alpha: 0.5 });
     }
     const afford = stats.cost <= session.credits;
-    r.text(afford ? 'ENTER  LAUNCH >' : 'CANNOT AFFORD', r.w - m, fy - 9, {
-      size: 14, align: 'right', color: afford ? COLORS.good : COLORS.danger,
-    });
+    if (!afford || !touch) {
+      r.text(afford ? 'ENTER  LAUNCH >' : 'CANNOT AFFORD', r.w - m, fy - 9, {
+        size: 14, align: 'right', color: afford ? COLORS.good : COLORS.danger,
+      });
+    }
   }
 
   /** What the mission demands. This is what you design against. */
-  drawMission(r, x, y, w, body, level, session) {
+  drawMission(r, x, y, w, body, level, session, touch) {
     const diff = difficultyAt(session.difficulty);
     const done = session.completions ? (session.completions[session.levelIndex] || 0) : 0;
     const payout = Math.max(diff.replayFloor, REPLAY_DECAY ** done);
@@ -236,7 +323,7 @@ export class Hangar {
 
     r.text('MISSION', x, y, { size: 11, alpha: 0.55 });
     if (canBrowse) {
-      r.text(`${session.levelIndex + 1}/${session.frontier + 1}   Q/E`, x + w, y,
+      r.text(`${session.levelIndex + 1}/${session.frontier + 1}${touch ? '' : '   Q/E'}`, x + w, y,
         { size: 10, align: 'right', alpha: 0.45 });
     }
     let yy = y + 22;
@@ -326,6 +413,7 @@ export class Hangar {
 
     let yy = y + 24;
     let rowIndex = 0;
+    this.rowRects = [];
     const engines = availableEngines(session.frontier);
 
     design.stages.forEach((stage, i) => {
@@ -341,6 +429,7 @@ export class Hangar {
         ['PROPELLANT', fmtMass(stage.fuel), `TANK ${fmtMass(stage.fuel * 0.085)}`],
       ];
       entries.forEach(([label, value, note], k) => {
+        this.rowRects.push({ y0: yy - 15, y1: yy + 8 });
         const selected = rowIndex === this.selection;
         if (selected) {
           r.rectS(x - 8, yy - 14, w + 16, 21, COLORS.accent, 0.8);
@@ -372,6 +461,7 @@ export class Hangar {
         fmtMass(COMPUTER_TIERS[design.computer || 0].mass)],
     ];
     payloadRows.forEach(([label, value, note]) => {
+      this.rowRects.push({ y0: yy - 15, y1: yy + 8 });
       const selected = rowIndex === this.selection;
       if (selected) {
         r.rectS(x - 8, yy - 14, w + 16, 21, COLORS.accent, 0.8);
@@ -388,9 +478,10 @@ export class Hangar {
     const comp = COMPUTER_TIERS[design.computer || 0];
     r.text(comp.modes.length ? `HOLD MODES: ${comp.modes.join('  ')}` : 'NO AUTOMATED FLIGHT',
       x, yy - 4, { size: 10, alpha: 0.45, color: COLORS.accent });
+    return yy + 4;
   }
 
-  drawVehicle(r, x, y, w, stats, body, level, session) {
+  drawVehicle(r, x, y, w, stats, body, level, session, touch) {
     const hints = difficultyAt(session.difficulty).hints;
     r.text('FLIGHT MODEL', x, y, { size: 11, alpha: 0.55 });
     let yy = y + 22;
@@ -478,7 +569,8 @@ export class Hangar {
       }
     }
 
-    if (hints === 'full') this.drawSuggestion(r, x, yy + 14, w, body, level, session);
+    if (hints === 'full') return this.drawSuggestion(r, x, yy + 14, w, body, level, session, touch);
+    return yy;
   }
 
   /**
@@ -487,14 +579,13 @@ export class Hangar {
    * modify, not a shortcut past the design decision -- which is why it shows
    * what it sized each stage for rather than just handing over a rocket.
    */
-  drawSuggestion(r, x, y, w, body, level, session) {
-    if (y > r.h - 110) return;   // no room; the readiness block matters more
+  drawSuggestion(r, x, y, w, body, level, session, touch) {
     const s = this.suggestionFor(level, body, session.frontier);
     r.text('SUGGESTED BUILD', x, y, { size: 11, alpha: 0.55 });
     let yy = y + 18;
     if (!s) {
       r.text('NO SUGGESTION FOR THIS MISSION', x, yy, { size: 11, alpha: 0.45 });
-      return;
+      return yy;
     }
     const n = s.design.stages.length;
     const dv = Math.round(s.stats.deltaV);
@@ -511,9 +602,10 @@ export class Hangar {
       x, yy, { size: 10, alpha: 0.5 });
     yy += 14;
     const afford = s.stats.cost <= session.credits;
-    r.text(`B  FIT THIS BUILD — ${s.stats.cost} CR`, x, yy, {
+    r.text(`${touch ? 'TAP FIT FOR' : 'B  FIT'} THIS BUILD — ${s.stats.cost} CR`, x, yy, {
       size: 11, color: afford ? COLORS.good : COLORS.danger,
     });
+    return yy;
   }
 
   /** Scale silhouette of the stack, bottom stage at the bottom. */
@@ -555,6 +647,10 @@ export class Hangar {
     ctx.stroke();
     r.reset();
   }
+}
+
+function inView(v, p) {
+  return p.x >= v.x0 && p.x < v.x1 && p.y >= v.y0 && p.y < v.y1;
 }
 
 function objectiveLabel(o, body) {

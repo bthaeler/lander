@@ -49,6 +49,11 @@ export class Game {
     this.paused = false;
     this.message = '';
     this.messageTime = 0;
+    // Overlay screens scroll on short screens; see fitted().
+    this.spans = {};
+    this.fits = {};
+    this.overlayScroll = {};
+    this.diffRects = [];
     this.restart();
   }
 
@@ -122,6 +127,12 @@ export class Game {
     this.loadLevel(i);
     this.state = STATE.HANGAR;
     return this;
+  }
+
+  /** Which screen is showing, for controls that change with it. */
+  get screen() {
+    if (this.state === STATE.FLYING && this.paused) return 'paused';
+    return this.state;
   }
 
   /** Hold modes the installed flight computer supports. */
@@ -254,6 +265,12 @@ export class Game {
     if (this.input.wasPressed('pause') && this.state === STATE.FLYING) {
       this.paused = !this.paused;
     }
+    // Every overlay opens scrolled to its top.
+    if (this.screen !== this.lastScreen) {
+      this.overlayScroll[this.screen] = 0;
+      this.lastScreen = this.screen;
+    }
+    this.scrollOverlay();
 
     if (this.paused && this.state === STATE.FLYING) {
       // Frozen. Cycling the HUD is allowed -- comparing layouts on a still
@@ -305,6 +322,13 @@ export class Game {
     }
     if (this.input.wasPressed('down')) {
       this.diffIndex = (this.diffIndex + 1) % DIFFICULTIES.length;
+    }
+    // A tap picks a setting; confirming it is a separate, deliberate press.
+    for (const t of this.input.taps || []) {
+      const p = this.unfit('difficulty', t);
+      const i = this.diffRects.findIndex((d) => p.y >= d.y0 && p.y < d.y1
+        && p.x >= d.x0 && p.x < d.x1);
+      if (i >= 0) this.diffIndex = i;
     }
     if (this.input.wasPressed('confirm') || this.input.wasPressed('launch')) {
       this.chooseDifficulty(this.diffIndex);
@@ -919,7 +943,7 @@ export class Game {
       // Hangar: frame the body so there is something behind the panels.
       r.camera.x = 0; r.camera.y = body.radius * 1.6;
       r.camera.rot = Math.PI / 2;
-      r.scale = (r.h * 0.5) / (body.radius * 1.2);
+      r.scale = (r.bottom * 0.5) / (body.radius * 1.2);
       return;
     }
     const ship = this.ship;
@@ -932,7 +956,7 @@ export class Game {
       const fit = Math.max(far, ship.radiusFromCentre, body.radius) * 1.25;
       r.camera.x = 0; r.camera.y = 0;
       r.camera.rot = 0;
-      const target = (Math.min(r.w, r.h) * 0.5) / fit;
+      const target = (Math.min(r.w, r.bottom) * 0.5) / fit;
       r.scale += (target - r.scale) * Math.min(1, dt * 6);
       return;
     }
@@ -947,12 +971,12 @@ export class Game {
     const alt = Math.max(1, body.altitudeAt(ship.x, ship.y));
     const R = body.radius;
     const dist = ship.radiusFromCentre;
-    const viewport = Math.min(r.w, r.h);
+    const viewport = Math.min(r.w, r.bottom);
 
     // Ship-centred. Target on-screen ship size scales with the display so the
     // close view reads the same on a laptop and a large monitor.
-    const shipScale = (r.h * 0.055) / Math.max(4, ship.length);
-    const altScale = (r.h * 0.40) / alt;
+    const shipScale = (r.bottom * 0.055) / Math.max(4, ship.length);
+    const altScale = (r.bottom * 0.40) / alt;
     const closeScale = clamp(Math.min(shipScale, altScale), 1e-9, 40);
 
     // Planet-centred: fit the whole body, and the ship along with it.
@@ -987,13 +1011,14 @@ export class Game {
 
     if (this.state === STATE.DIFFICULTY) {
       this.dim(0.85);
-      this.drawDifficulty();
+      this.fitted('difficulty', () => this.drawDifficulty());
+      this.revealDifficulty();
       return;
     }
 
     if (this.state === STATE.HANGAR) {
       this.dim(0.78);
-      this.hangar.draw(r, this.session, this.body, this.level);
+      this.hangar.draw(r, this.session, this.body, this.level, this.input.touch);
       this.drawHudLabel();
       return;
     }
@@ -1016,14 +1041,100 @@ export class Game {
       drawHUD(r, telemetry(this), this.hudLayout);
       // The title flash would sit behind the pause overlay forever, since its
       // timer is frozen along with everything else.
-      if (this.paused) this.drawPaused();
-      else this.drawTitleFlash();
+      if (this.paused) {
+        this.dim(0.72);
+        this.fitted('paused', () => this.drawPaused());
+      } else this.drawTitleFlash();
     }
-    if (this.state === STATE.RESULT) this.drawResult();
-    if (this.state === STATE.COMPLETE) this.drawComplete();
+    if (this.state === STATE.RESULT) {
+      this.dim(0.7);
+      this.fitted('result', () => this.drawResult());
+    }
+    if (this.state === STATE.COMPLETE) {
+      this.dim(0.85);
+      this.fitted('complete', () => this.drawComplete());
+    }
 
     this.drawMessage();
     this.drawHudLabel();
+  }
+
+  /**
+   * Draw an overlay screen inside the space above any touch controls. If it
+   * came out taller than that space last frame it scrolls (drag or wheel)
+   * rather than shrinking -- shrunk, a results screen was unreadable on a
+   * phone. `draw` returns the [top, bottom] it covered.
+   */
+  fitted(key, draw) {
+    const r = this.r;
+    const ctx = r.ctx;
+    const margin = 14;
+    const room = r.bottom - margin * 2;
+    const span = this.spans[key];
+    let fit = { s: 1, from: 0, to: 0, cx: r.w / 2 };
+    let max = 0;
+    if (span) {
+      const len = span[1] - span[0];
+      max = Math.max(0, len - room);
+      const scroll = clamp(this.overlayScroll[key] || 0, 0, max);
+      this.overlayScroll[key] = scroll;
+      const to = max > 0 ? margin - scroll : clamp(span[0], margin, r.bottom - margin - len);
+      fit = { s: 1, from: span[0], to, cx: r.w / 2 };
+    }
+    ctx.save();
+    if (max > 0) {
+      ctx.beginPath();
+      ctx.rect(0, 0, r.w, r.bottom);
+      ctx.clip();
+    }
+    ctx.translate(0, fit.to - fit.from);
+    this.spans[key] = draw();
+    ctx.restore();
+    this.fits[key] = fit;
+
+    if (max > 0) {
+      const len = span[1] - span[0];
+      const thumb = Math.max(24, room * (room / len));
+      const ty = margin + (room - thumb) * (this.overlayScroll[key] / max);
+      const bx = r.w - 10;
+      r.lineS(bx, margin, bx, margin + room, COLORS.ui, 0.12);
+      r.lineS(bx, ty, bx, ty + thumb, COLORS.accent, 0.7, 2);
+    }
+  }
+
+  /**
+   * Scroll the difficulty list so the highlighted setting, which is the one
+   * showing its notes, is fully on screen after the selection moves.
+   */
+  revealDifficulty() {
+    if (this.revealedDiff === this.diffIndex) return;
+    this.revealedDiff = this.diffIndex;
+    const rect = this.diffRects[this.diffIndex];
+    const span = this.spans.difficulty;
+    if (!rect || !span) return;
+    const margin = 14;
+    const room = this.r.bottom - margin * 2;
+    // Screen y of a content y at scroll s is (y - span[0]) + margin - s.
+    let s = this.overlayScroll.difficulty || 0;
+    if (rect.y1 - span[0] - s > room) s = rect.y1 - span[0] - room;
+    if (rect.y0 - span[0] - s < 0) s = rect.y0 - span[0];
+    this.overlayScroll.difficulty = s;
+  }
+
+  /** Drags and the wheel scroll whichever overlay screen is up. */
+  scrollOverlay() {
+    const key = this.screen;
+    if (key === STATE.HANGAR || key === STATE.FLYING) return;
+    for (const sc of this.input.scrolls || []) {
+      this.overlayScroll[key] = (this.overlayScroll[key] || 0) + sc.dy;
+    }
+  }
+
+  /** A screen point back into a fitted overlay's own coordinates. */
+  unfit(key, p) {
+    const f = this.fits[key];
+    if (!f) return p;
+    return { x: (p.x - f.cx) / f.s + f.cx, y: (p.y - f.to) / f.s + f.from };
   }
 
   dim(alpha) {
@@ -1036,6 +1147,7 @@ export class Game {
 
   drawMessage() {
     if (this.messageTime <= 0) return;
+    if (this.state === STATE.RESULT || this.state === STATE.COMPLETE) return;
     this.r.text(this.message, this.r.w / 2, this.r.h * 0.22, {
       size: 15, align: 'center', color: COLORS.accent,
       alpha: clamp(this.messageTime, 0, 1),
@@ -1044,7 +1156,7 @@ export class Game {
 
   drawHudLabel() {
     if (this.hudLabelTime <= 0) return;
-    this.r.text(`HUD: ${HUD_LAYOUTS[this.hudLayout]}`, this.r.w / 2, this.r.h - 60, {
+    this.r.text(`HUD: ${HUD_LAYOUTS[this.hudLayout]}`, this.r.w / 2, this.r.bottom - 60, {
       size: 13, align: 'center', alpha: clamp(this.hudLabelTime, 0, 1) * 0.8,
     });
   }
@@ -1053,19 +1165,30 @@ export class Game {
     if (this.titleTime <= 0) return;
     const a = clamp(this.titleTime / 1.4, 0, 1);
     const r = this.r;
-    r.text(`LEVEL ${this.level.id}`, r.w / 2, r.h * 0.36,
+    // Below the objective panel, which owns the top centre.
+    const y = Math.max(r.bottom * 0.36, 150);
+    r.text(`LEVEL ${this.level.id}`, r.w / 2, y,
       { size: 13, align: 'center', alpha: a * 0.7 });
-    r.text(this.level.title, r.w / 2, r.h * 0.36 + 34,
+    r.text(this.level.title, r.w / 2, y + 34,
       { size: 30, align: 'center', alpha: a });
-    r.text(this.body.name, r.w / 2, r.h * 0.36 + 58,
+    r.text(this.body.name, r.w / 2, y + 58,
       { size: 13, align: 'center', alpha: a * 0.7 });
-    if (this.session.levelIndex === 0) {
-      r.text('LEFT/RIGHT ROTATE    W/S THROTTLE    SPACE FULL THRUST    F CUTOFF',
-        r.w / 2, r.h * 0.36 + 92, { size: 12, align: 'center', alpha: a * 0.6 });
-      r.text('X STAGE    , . TIME WARP    M MAP    H HUD    R ABORT',
-        r.w / 2, r.h * 0.36 + 112, { size: 12, align: 'center', alpha: a * 0.6 });
-      r.text('T HOLD    G HOLD MODE   (needs a flight computer)',
-        r.w / 2, r.h * 0.36 + 132, { size: 12, align: 'center', alpha: a * 0.5 });
+    // The first level's control tips, when there is room for them above the
+    // status line; on a phone the pause screen carries them instead.
+    if (this.session.levelIndex === 0 && y + 92 + 2 * 20 < r.bottom - 50) {
+      const tips = this.input.touch ? [
+        '◀ ▶ ROTATE    THR ▲ ▼ THROTTLE    BOOST FULL THRUST    CUT CUTOFF',
+        'STAGE SEPARATE    WARP− WARP+ TIME WARP    MAP    II PAUSE',
+        'HOLD    MODE   (needs a flight computer)',
+      ] : [
+        'LEFT/RIGHT ROTATE    W/S THROTTLE    SPACE FULL THRUST    F CUTOFF',
+        'X STAGE    , . TIME WARP    M MAP    H HUD    R ABORT',
+        'T HOLD    G HOLD MODE   (needs a flight computer)',
+      ];
+      tips.forEach((tip, i) => {
+        r.text(tip, r.w / 2, y + 92 + i * 20,
+          { size: 12, align: 'center', alpha: a * (i < 2 ? 0.6 : 0.5) });
+      });
     }
   }
 
@@ -1080,16 +1203,23 @@ export class Game {
     const cx = r.w / 2;
     const w = Math.min(560, r.w - 80);
     const x0 = cx - w / 2;
-    let y = Math.max(70, r.h / 2 - 250);
+    let y = Math.max(70, r.bottom / 2 - 250);
+    const top = y - 34;
 
     r.text('LANDER', cx, y, { size: 34, align: 'center', color: COLORS.accent });
     y += 26;
     r.text('SELECT A DIFFICULTY', cx, y, { size: 13, align: 'center', alpha: 0.6 });
     y += 46;
 
+    // On a short screen (a phone) only the highlighted setting lists its
+    // notes, so the choice fits without shrinking the text.
+    const compact = r.bottom < 560;
+    this.diffRects = [];
     DIFFICULTIES.forEach((d, i) => {
       const on = i === this.diffIndex;
-      const h = 44 + d.notes.length * 16;
+      const notes = compact && !on ? [] : d.notes;
+      const h = 44 + notes.length * 16;
+      this.diffRects.push({ x0: x0 - 12, x1: x0 + w + 12, y0: y - 22, y1: y + h + 6 });
       if (on) r.rectS(x0 - 12, y - 22, w + 24, h + 12, COLORS.accent, 0.8);
       r.text(`${on ? '>' : ' '} ${d.name}`, x0, y,
         { size: 17, color: on ? COLORS.accent : COLORS.ui, alpha: on ? 1 : 0.55 });
@@ -1098,29 +1228,33 @@ export class Game {
       y += 20;
       r.text(d.tagline, x0 + 18, y, { size: 12, alpha: on ? 0.75 : 0.35 });
       y += 18;
-      for (const note of d.notes) {
+      for (const note of notes) {
         r.text(`- ${note}`, x0 + 18, y, { size: 11, alpha: on ? 0.55 : 0.2 });
         y += 16;
       }
-      y += 22;
+      y += compact ? 16 : 22;
     });
 
-    y += 6;
-    r.text('THE PHYSICS, THE LEVELS AND THE LANDING RULES ARE THE SAME AT EVERY SETTING.',
-      cx, y, { size: 11, align: 'center', alpha: 0.4 });
-    y += 28;
-    r.text('W/S SELECT      ENTER CONFIRM', cx, y, {
+    if (!compact) {
+      y += 6;
+      r.text('THE PHYSICS, THE LEVELS AND THE LANDING RULES ARE THE SAME AT EVERY SETTING.',
+        cx, y, { size: 11, align: 'center', alpha: 0.4 });
+      y += 6;
+    }
+    y += 22;
+    r.text(this.input.touch ? 'TAP A SETTING, THEN START' : 'W/S SELECT      ENTER CONFIRM', cx, y, {
       size: 14, align: 'center',
       alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
     });
+    return [top, y + 6];
   }
 
   /** Pause overlay, which doubles as the controls reference. */
   drawPaused() {
     const r = this.r;
-    this.dim(0.72);
     const cx = r.w / 2;
-    let y = r.h / 2 - 190;
+    let y = r.bottom / 2 - 190;
+    const top = y - 32;
 
     r.text('PAUSED', cx, y, { size: 32, align: 'center', color: COLORS.accent });
     y += 22;
@@ -1128,7 +1262,15 @@ export class Game {
       cx, y, { size: 12, align: 'center', alpha: 0.55 });
     y += 40;
 
-    const rows = [
+    // On touch the buttons name themselves; this lists only what they
+    // cannot say.
+    const rows = this.input.touch ? [
+      ['◀  ▶', 'torque only: stop every turn you start'],
+      ['THR ▲  ▼', 'a lever: it stays where you leave it'],
+      ['BOOST', 'full thrust while held'],
+      ['HOLD  MODE', 'flight computer, if one is fitted'],
+      ['HUD  ABORT', 'available here, while paused'],
+    ] : [
       ['ROTATE', 'LEFT / RIGHT   (A / D)'],
       ['THROTTLE', 'W / S   (UP / DOWN)'],
       ['FULL THRUST', 'SPACE  (hold)'],
@@ -1150,18 +1292,19 @@ export class Game {
     }
 
     y += 16;
-    r.text('PRESS P TO RESUME', cx, y, {
+    r.text(this.input.touch ? 'TAP RESUME' : 'PRESS P TO RESUME', cx, y, {
       size: 14, align: 'center',
       alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
     });
+    return [top, y + 6];
   }
 
   drawResult() {
     const r = this.r;
     const res = this.result;
-    this.dim(0.7);
     const cx = r.w / 2;
-    let y = r.h / 2 - 170;
+    let y = r.bottom / 2 - 170;
+    const top = y - 32;
 
     const good = res.success;
     r.text(good ? 'MISSION COMPLETE' : 'VEHICLE LOST', cx, y,
@@ -1239,18 +1382,20 @@ export class Game {
     r.text(`CREDITS  ${this.session.credits}`, cx, y,
       { size: 15, align: 'center', color: COLORS.accent });
     y += 32;
-    r.text(good ? 'PRESS ENTER FOR THE HANGAR' : 'PRESS ENTER TO REBUILD AND TRY AGAIN',
+    const go = this.input.touch ? 'TAP CONTINUE' : 'PRESS ENTER';
+    r.text(good ? `${go} FOR THE HANGAR` : `${go} TO REBUILD AND TRY AGAIN`,
       cx, y, {
         size: 14, align: 'center',
         alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
       });
+    return [top, y + 6];
   }
 
   drawComplete() {
     const r = this.r;
-    this.dim(0.85);
     const cx = r.w / 2;
-    let y = r.h / 2 - 90;
+    let y = r.bottom / 2 - 90;
+    const top = y - 32;
     r.text('CAMPAIGN COMPLETE', cx, y,
       { size: 32, align: 'center', color: COLORS.good });
     y += 44;
@@ -1260,10 +1405,13 @@ export class Game {
     r.text(`${this.session.totalEarned} CREDITS EARNED`, cx, y,
       { size: 15, align: 'center', alpha: 0.75 });
     y += 50;
-    r.text('ENTER  BACK TO THE HANGAR        R  RESTART THE CAMPAIGN', cx, y, {
+    r.text(this.input.touch
+      ? 'HANGAR  KEEP PLAYING        NEW CAMPAIGN  START OVER'
+      : 'ENTER  BACK TO THE HANGAR        R  RESTART THE CAMPAIGN', cx, y, {
       size: 14, align: 'center',
       alpha: 0.55 + 0.45 * Math.abs(Math.sin(this.time * 2)),
     });
+    return [top, y + 6];
   }
 }
 

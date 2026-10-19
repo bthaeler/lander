@@ -8,6 +8,7 @@
     "start": "node server.js",
     "serve": "node server.js",
     "test": "node test/orbittest.mjs && node test/physicstest.mjs && node test/gametest.mjs",
-    "economy": "node test/economy.mjs"
+    "economy": "node test/economy.mjs",
+    "deploy": "node scripts/deploy.mjs"
   }
 }

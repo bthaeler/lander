@@ -29,15 +29,15 @@ function ok_once(name, cond) {
 
 function stubRenderer() {
   return {
-    camera: { x: 0, y: 0, rot: 0 }, w: 1280, h: 800, scale: 1,
+    camera: { x: 0, y: 0, rot: 0 }, w: 1280, h: 800, bottom: 800, scale: 1,
     setTier() {},
   };
 }
 class StubInput {
-  constructor() { this.held = new Set(); this.p = new Set(); }
+  constructor() { this.held = new Set(); this.p = new Set(); this.taps = []; this.scrolls = []; }
   isDown(a) { return this.held.has(a); }
   wasPressed(a) { return this.p.has(a); }
-  endFrame() { this.p.clear(); }
+  endFrame() { this.p.clear(); this.taps = []; this.scrolls = []; }
   press(a) { this.p.add(a); }
   hold(a, on) { on ? this.held.add(a) : this.held.delete(a); }
   clear() { this.held.clear(); }
@@ -1162,6 +1162,68 @@ console.log('suggested builds:');
   strict.update(DT); inp2.endFrame();
   ok('but not at FLIGHT DIRECTOR',
     JSON.stringify(strict.session.design) === before);
+}
+
+// --- touch ------------------------------------------------------------------
+console.log('touch input:');
+{
+  // Input listens on window; Node has none, so give it a bare event target.
+  globalThis.window = new EventTarget();
+  const { Input } = await import(ROOT + 'input.js');
+  const keys = new EventTarget();
+  const input = new Input(keys);
+  input.touch = true;
+
+  input.press('boost');
+  ok('a held button reads as down and as pressed once',
+    input.isDown('boost') && input.wasPressed('boost'));
+  input.endFrame();
+  input.press('boost');
+  ok('holding it does not press it again', input.isDown('boost') && !input.wasPressed('boost'));
+  input.release('boost');
+  ok('releasing it lets go', !input.isDown('boost'));
+
+  input.press('stage'); input.release('stage');
+  ok('a tap shorter than a frame still registers', input.wasPressed('stage'));
+  input.endFrame();
+
+  const key = new Event('keydown');
+  key.code = 'KeyX';
+  key.preventDefault = () => {};
+  keys.dispatchEvent(key);
+  ok('a key press reaches the same action', input.wasPressed('stage'));
+  ok('and switches out of touch mode', input.touch === false);
+
+  input.taps.push({ x: 1, y: 2 });
+  input.scrolls.push({ x: 1, y: 2, dy: 3 });
+  input.endFrame();
+  ok('taps and scrolls last one frame', !input.taps.length && !input.scrolls.length);
+}
+{
+  const input = new StubInput();
+  const game = new Game(stubRenderer(), input);
+  game.promptDifficulty();
+  game.diffRects = [0, 1, 2].map((i) => ({ x0: 0, x1: 500, y0: i * 100, y1: i * 100 + 90 }));
+  input.taps.push({ x: 250, y: 245 });
+  game.update(DT); input.endFrame();
+  ok('tapping a difficulty selects it', game.diffIndex === 2);
+  ok('without starting the campaign', game.screen === 'difficulty');
+
+  game.chooseDifficulty(0);
+  const h = game.hangar;
+  // What a draw would have recorded: the editor's extent and its row bands.
+  h.views.editor = { x0: 300, x1: 800, y0: 50, y1: 330 };
+  h.rowRects = [0, 1, 2, 3, 4].map((i) => ({ y0: 100 + i * 22, y1: 122 + i * 22 }));
+  h.scroll.editor = 22;
+  input.taps.push({ x: 500, y: 100 + 3 * 22 - 22 + 5 });
+  game.update(DT); input.endFrame();
+  ok('tapping an editor row selects it, allowing for scroll', h.selection === 3);
+  input.taps.push({ x: 100, y: 100 });
+  game.update(DT); input.endFrame();
+  ok('a tap outside the editor leaves the selection', h.selection === 3);
+  input.scrolls.push({ x: 500, y: 200, dy: 40 });
+  game.update(DT); input.endFrame();
+  ok('dragging over a column scrolls it', h.scroll.editor === 62);
 }
 
 console.log(failures === 0 ? '\nALL GAME TESTS PASSED' : `\n${failures} FAILURE(S)`);

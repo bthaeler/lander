@@ -4,3 +4,6 @@ node_modules/
 
 # Tooling traces, not project content
 .spec-workflow/
+
+# Deploy credentials (scripts/deploy.mjs)
+.env.deploy

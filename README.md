@@ -33,6 +33,17 @@ Everything up to that level is unlocked and you arrive with roughly the credits
 a real playthrough would have. From the browser console, `lander.game.jumpTo(5)`
 does the same thing (0-based there).
 
+## Publishing
+
+```sh
+npm run deploy           # upload index.html, manifest.json, css/ and js/
+npm run deploy -- --dry  # list what would be sent
+```
+
+Uploads over FTP with TLS using `curl`. Credentials go in `.env.deploy`
+(gitignored) as `LANDER_FTP_USER` and `LANDER_FTP_PASS`; see
+`scripts/deploy.mjs` for the optional host and folder settings.
+
 ## Controls
 
 | Key | Action |
@@ -49,6 +60,21 @@ does the same thing (0-based there).
 | `H` | Cycle HUD layout (TOP BAR / CORNERS / CLUSTER) |
 | `R` | Abort the mission |
 | In the hangar | `W`/`S` select, `A`/`D` adjust (hold for coarse), `N` add stage, `X` remove stage, `Q`/`E` pick which level to fly, `B` fit the suggested build (CADET only), `ENTER` launch |
+
+### On a phone or tablet
+
+On a touch screen the game shows on-screen buttons that drive the same
+actions as the keys, and the set changes with the screen: ◀ ▶ to rotate,
+THR ▲ ▼ for the throttle lever, BOOST for momentary full thrust, plus STAGE,
+MAP, WARP and pause. ABORT is only offered from the pause screen. In the
+hangar, tap a row to select it, use ◀ ▶ to adjust, and drag a column to
+scroll it.
+
+Play in landscape; held upright, the game asks you to rotate. Android asks
+for fullscreen on the first tap. On an iPhone, Share → Add to Home Screen
+opens it without the browser bars, which matters on a screen that short.
+Pressing any key switches back to the keyboard layout, so a tablet with a
+keyboard plays like the desktop game.
 
 ## How it plays
 

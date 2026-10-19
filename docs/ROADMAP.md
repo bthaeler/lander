@@ -204,6 +204,31 @@ has **exactly zero angular momentum**, which makes its conic degenerate.
 - [ ] Save/resume a campaign between sessions
 - [ ] Rebindable keys
 
+## Mobile and touch `[x]`
+
+- [x] On-screen buttons (`touch.js`) hold the same semantic actions as keys,
+      so game logic cannot tell them apart. The set follows the screen, and
+      ABORT lives on the pause screen only — one stray tap must not end a
+      flight.
+- [x] Layout is done in logical pixels no smaller than 760 x 360; a phone
+      draws that and scales it down only slightly (900 x 500 made the text
+      ~7 px on a phone, which was too small to read). The renderer's
+      `bottom` is the edge of the area above the button band, and the HUD,
+      the flight camera and the overlay screens all lay out against it
+      rather than the canvas height.
+- [x] Hangar columns scroll (drag, or the mouse wheel) when the screen is too
+      short, and tapping an editor row selects it. The selection is kept on
+      screen as it moves.
+- [x] Overlay screens (difficulty, pause, results) scroll (drag or wheel) if
+      they come out taller than the room above the buttons. They used to
+      shrink to fit, which took a results screen down to ~55% on a phone.
+      On a short screen the difficulty list shows notes for the highlighted
+      setting only, and the touch pause screen explains just what the
+      buttons cannot.
+- [x] Landscape only on touch; the canvas stays inside the safe area; home
+      screen manifest; fullscreen on first tap where the browser allows it.
+- [ ] A home-screen icon (iOS currently uses a screenshot).
+
 ## Phase 9 — Difficulty levels `[x]`
 
 Chosen once at launch, before the first hangar. The campaign, the physics and
@@ -338,6 +363,54 @@ existing test honest.
 | NAV-3 PROFILE | Target speed/acceleration schedule, ΔV vs plan | — |
 | NAV-4 AUTOLAND | Flies it | FC-2 (attitude) / FC-3 (full) |
 
+## Phase 11 — Mobile UI redesign `[ ]`
+
+The current mobile support is the desktop game adapted to fit: the same
+screens, drawn a little smaller, with scrolling where they overflow and a
+band of buttons along the bottom. It is playable but cramped. A phone held
+sideways is ~750 x 340 CSS pixels, a quarter of a desktop window, and a
+layout designed for 1440 x 900 cannot be shrunk into that and stay
+comfortable. This phase designs the phone experience in its own right.
+
+Constraints learned from the adapted version:
+
+- Text below ~11 CSS px is unreadable on a phone; the desktop layouts only
+  fit at ~7 px. Mobile screens need to be designed at their real size, not
+  scaled.
+- Scrolling rescues overflow but hides things: the bonuses on the results
+  screen and the readiness checks in the hangar end up below the fold.
+- The bottom button band costs ~20% of the height of a phone in landscape,
+  on top of the browser chrome (iOS Safari has no fullscreen outside Add to
+  Home Screen).
+- Thumbs cover the corners, which is exactly where the CORNERS and CLUSTER
+  HUD layouts put their readouts.
+
+Work:
+
+- [ ] **Separate mobile layouts, chosen by screen size**, not a scaled copy
+      of the desktop ones. Desktop stays exactly as it is.
+- [ ] **Hangar as a sequence, not three columns.** One panel at a time —
+      MISSION, DESIGN, CHECK — with tabs or swipes, and a persistent strip
+      showing the numbers that decide a build (delta-v vs needed, TWR, cost
+      vs credits) so they are never off screen while editing.
+- [ ] **Direct manipulation in the editor:** tap a value to change it (a
+      picker for engines and tiers, a slider or stepper for propellant)
+      instead of select-row-then-adjust with ◀ ▶.
+- [ ] **A phone flight HUD:** fewer, larger readouts placed where thumbs are
+      not; the top bar trimmed to altitude, vertical speed and propellant,
+      with the rest on demand.
+- [ ] **Flight controls redesigned around thumbs:** a throttle slider that
+      shows the lever position instead of THR ▲ ▼ buttons, rotation on a
+      drag or tilt option, and secondary actions (warp, map, stage, hold)
+      folded into a menu so the band is smaller.
+- [ ] **Results and menus as cards** sized to fit a phone screen: headline
+      outcome and credits first, the detailed breakdown one tap away.
+- [ ] **Portrait support** for the menus and the hangar, where a vertical
+      list may suit better than landscape; flight stays landscape.
+- [ ] **Test on real devices** (iPhone Safari, Android Chrome, a tablet)
+      throughout, not only in an emulator: font rendering, safe areas,
+      browser chrome and touch latency all differ.
+
 ## Phase 7 — Interplanetary `[ ]` (the capstone, not started)
 
 - [ ] Multi-body: Moon orbiting Earth, n-body acceleration summation
@@ -385,5 +458,3 @@ and no maneuver nodes.
 - Recovering *jettisoned* stages (currently they are simply lost, which is
   what makes an expendable design expensive; a recovery-and-refurbish
   mechanic would be a real addition rather than a fix).
-- Mobile/touch controls. Input already goes through semantic actions, so this
-  attaches in `input.js` without touching game logic.

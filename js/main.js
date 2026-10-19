@@ -1,5 +1,6 @@
 import { Renderer } from './render.js';
 import { Input } from './input.js';
+import { TouchControls } from './touch.js';
 import { Game } from './game.js';
 import { difficultyIndexById } from './config.js';
 
@@ -7,6 +8,8 @@ const canvas = document.getElementById('screen');
 const renderer = new Renderer(canvas);
 const input = new Input();
 const game = new Game(renderer, input);
+input.bindCanvas(canvas, renderer);
+const touch = new TouchControls(input, renderer);
 
 // Testing shortcuts: ?level=6 starts in that level's hangar with everything up
 // to it unlocked, &credits=200000 overrides the budget, and ?difficulty=cadet
@@ -27,7 +30,10 @@ if (params.has('level')) {
   game.promptDifficulty();
 }
 
-window.addEventListener('resize', () => renderer.resize());
+window.addEventListener('resize', () => {
+  renderer.resize();
+  touch.resize();
+});
 
 let last = performance.now();
 
@@ -36,6 +42,7 @@ function frame(now) {
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
 
+  touch.update(game);
   game.update(dt);
   game.draw(dt);
   input.endFrame();
@@ -48,4 +55,4 @@ requestAnimationFrame(frame);
 // Handy from the console:
 //   lander.game.jumpTo(6)            -- level 7's hangar (0-based here)
 //   lander.game.session.credits = 1e6
-window.lander = { game, renderer, input };
+window.lander = { game, renderer, input, touch };

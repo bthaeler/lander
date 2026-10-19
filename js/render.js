@@ -19,12 +19,18 @@ const TIER_STYLE = {
   3: { line: 1.6, glow: 10, stars: 700, twinkle: true },
 };
 
+// Smallest logical canvas anything is laid out in. See resize().
+const MIN_W = 760;
+const MIN_H = 360;
+
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.w = 0;
     this.h = 0;
+    this.fit = 1;
+    this.insetBottom = 0;   // CSS pixels kept clear for touch controls
     this.camera = { x: 0, y: 0, rot: 0 };
     this.scale = 1;          // pixels per metre
     this.tier = 1;
@@ -33,15 +39,40 @@ export class Renderer {
     this.resize();
   }
 
+  /**
+   * Layout happens in logical pixels, never fewer than MIN_W x MIN_H. A
+   * phone in landscape is ~840 x 390 CSS pixels; laying the hangar out in
+   * that would overlap itself, so the canvas is drawn at a larger logical
+   * size and scaled down to fit. `fit` is logical pixels per CSS pixel.
+   */
   resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.w = this.canvas.clientWidth || window.innerWidth;
-    this.h = this.canvas.clientHeight || window.innerHeight;
-    this.canvas.width = Math.round(this.w * dpr);
-    this.canvas.height = Math.round(this.h * dpr);
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const cssW = this.canvas.clientWidth || window.innerWidth;
+    const cssH = this.canvas.clientHeight || window.innerHeight;
+    this.fit = Math.max(1, MIN_W / cssW, MIN_H / cssH);
+    this.w = cssW * this.fit;
+    this.h = cssH * this.fit;
+    this.canvas.width = Math.round(cssW * dpr);
+    this.canvas.height = Math.round(cssH * dpr);
+    this.ctx.setTransform(dpr / this.fit, 0, 0, dpr / this.fit, 0, 0);
     this.buildStars();
   }
+
+  /** A client (CSS pixel) point to logical canvas coordinates. */
+  toLogical(clientX, clientY) {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left) * this.fit,
+      y: (clientY - rect.top) * this.fit,
+    };
+  }
+
+  /**
+   * Bottom edge of the area screens should lay out in. On-screen touch
+   * controls take a band along the bottom, and readouts must not sit under
+   * them; the band is set in CSS pixels by the touch layer.
+   */
+  get bottom() { return this.h - this.insetBottom * this.fit; }
 
   get style() { return TIER_STYLE[this.tier] || TIER_STYLE[1]; }
 
@@ -83,7 +114,9 @@ export class Renderer {
     const s = Math.sin(-this.camera.rot);
     return {
       x: this.w / 2 + (dx * c - dy * s) * this.scale,
-      y: this.h / 2 - (dx * s + dy * c) * this.scale,
+      // Centred in the area above any touch controls, so the ground under a
+      // landing ship is never behind a button.
+      y: this.bottom / 2 - (dx * s + dy * c) * this.scale,
     };
   }
 

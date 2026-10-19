@@ -1,0 +1,11 @@
+{
+  "name": "LANDER",
+  "short_name": "LANDER",
+  "description": "A 2D orbital lander: real two-body physics, multi-stage rocket design, and landings from orbit.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#000000"
+}

@@ -74,6 +74,7 @@ export function telemetry(game) {
     prograde: Math.atan2(ship.vy, ship.vx),
     upAngle: ship.upAngle,
     camRot: game.r.camera.rot,
+    touch: game.input.touch,
   };
 }
 
@@ -160,19 +161,19 @@ function drawCorners(r, t) {
 
   const fast = landingPhase(t) && t.speed > t.envelope.speed;
   field(r, 'CLIMB / SINK', `${vsGlyph(t.vs)}${fmtSpeed(Math.abs(t.vs))}`,
-    m, r.h - m - 96, { size: 22, alpha: fast ? blink(t.time) : 1 });
+    m, r.bottom - m - 96, { size: 22, alpha: fast ? blink(t.time) : 1 });
   field(r, 'DOWNRANGE', `${hsGlyph(t.hs)}${fmtSpeed(Math.abs(t.hs))}`,
-    m, r.h - m - 38, { size: 22, alpha: fast ? blink(t.time) : 1 });
+    m, r.bottom - m - 38, { size: 22, alpha: fast ? blink(t.time) : 1 });
 
   // Clears the mission panel above it.
   drawAttitude(r, t, r.w / 2, m + 152, 72);
-  drawOrbitBlock(r, t, r.w - m, r.h - m - 96, 'right');
+  drawOrbitBlock(r, t, r.w - m, r.bottom - m - 96, 'right');
   if (landingPhase(t)) drawEnvelope(r, t, r.w / 2, m + 246, 'center');
 }
 
 function drawCluster(r, t) {
   const m = 24;
-  const y0 = r.h - m - 132;
+  const y0 = r.bottom - m - 132;
   const fast = landingPhase(t) && t.speed > t.envelope.speed;
   const rows = [
     ['ALT', fmtDistance(t.altitude), 1],
@@ -193,7 +194,7 @@ function drawCluster(r, t) {
   r.barS(m + 52, fy - 10, 150, 11, frac, COLORS.ui);
   r.text(fmtMass(t.fuel), m + 212, fy, { size: 12, alpha: 0.7 });
 
-  drawAttitude(r, t, r.w - m - 76, r.h - m - 78, 66);
+  drawAttitude(r, t, r.w - m - 76, r.bottom - m - 78, 66);
   drawOrbitBlock(r, t, m, m + 130, 'left');
   if (landingPhase(t)) drawEnvelope(r, t, m, m + 112, 'left');
 }
@@ -318,7 +319,7 @@ function drawMissionPanel(r, t, layout) {
 
 /** Warp, mission clock and life support -- bottom centre. */
 function drawStatusPanel(r, t) {
-  const y = r.h - 18;
+  const y = r.bottom - 18;
   const parts = [];
   parts.push(t.warp > 1 ? `WARP ${t.warp}x` : 'WARP 1x');
   parts.push(`MET ${fmtTime(t.missionTime)}`);
@@ -341,7 +342,7 @@ function drawStatusPanel(r, t) {
   // Throttle: the tape shows actual engine output, the number shows the
   // commanded lever, so spool-up is visible and the setting is never a guess.
   const th = 90;
-  const ty = r.h - 16 - th;
+  const ty = r.bottom - 16 - th;
   r.vbarS(5, ty, 7, th, t.throttle, COLORS.flame, 0.85);
   r.text(`${Math.round(t.throttleSet * 100)}%`, 5, ty - 7,
     { size: 10, alpha: 0.6, color: COLORS.flame });
@@ -349,7 +350,9 @@ function drawStatusPanel(r, t) {
 
 function drawWarnings(r, t) {
   const msgs = [];
-  if (t.needsStaging) msgs.push('STAGE EMPTY — PRESS X TO SEPARATE');
+  if (t.needsStaging) {
+    msgs.push(`STAGE EMPTY — ${t.touch ? 'TAP STAGE' : 'PRESS X'} TO SEPARATE`);
+  }
   else if (t.fuel <= 0 && !t.canStage) msgs.push('PROPELLANT EXHAUSTED');
   else if (t.fuel / Math.max(1, t.fuelCapacity) < 0.1) msgs.push('LOW PROPELLANT');
   if (t.lifeRemaining < 600) msgs.push('LIFE SUPPORT CRITICAL');
@@ -364,7 +367,7 @@ function drawWarnings(r, t) {
   }
 
   msgs.forEach((m, i) => {
-    r.text(m, r.w / 2, r.h - 58 - i * 19, {
+    r.text(m, r.w / 2, r.bottom - 58 - i * 19, {
       size: 12, align: 'center', color: COLORS.warn, alpha: blink(t.time, 2.5),
     });
   });

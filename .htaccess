@@ -1,0 +1,12 @@
+# Make browsers check for a newer copy of the game on every load.
+#
+# Without a Cache-Control header, browsers guess how long to reuse a file
+# (often days), and each ES module is cached separately -- so after an update
+# a phone could run new files next to stale ones. "no-cache" still lets the
+# browser keep its copy; it just asks first, and an unchanged file costs one
+# short 304 reply.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(html|js|css|json)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
