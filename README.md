@@ -4,6 +4,11 @@ A 2D orbital lander. Line art on black, real two-body physics, multi-stage
 rockets you design yourself, and a campaign that works up from a 400 m drop
 onto a lunar pad to launching from Earth.
 
+**Play it at <https://lander.thaeler.net>** — in a desktop browser, or on a
+phone or tablet held sideways.
+
+To run it locally:
+
 ```sh
 npm start          # or: node server.js [port]
 ```
